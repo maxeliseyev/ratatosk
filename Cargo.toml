@@ -8,7 +8,7 @@ version = "0.18.6"
 edition = "2021"
 
 [patch.crates-io]
-# vproxy fork of rustls 0.23: adds ClientConfig::session_id_hook (REALITY) and
+# Ratatosk fork of rustls 0.23: adds ClientConfig::session_id_hook (REALITY) and
 # ClientConfig::client_hello_rewriter (Chrome TLS fingerprint).
 # Branch reality-0.23, pinned to the commit that was tested.
 rustls = { git = "https://github.com/maxeliseyev/rustls.git", rev = "7df70d14" }

@@ -1,14 +1,14 @@
-//! `vproxy-server -c server.toml [-v]`: run the h3 transport server.
-//! `vproxy-server --stats [--admin <socket>]`: print a live stats snapshot.
+//! `ratatosk-server -c server.toml [-v]`: run the h3 transport server.
+//! `ratatosk-server --stats [--admin <socket>]`: print a live stats snapshot.
 
 use anyhow::{bail, Result};
+use ratatosk_server::{Accounts, Server, Settings, Snapshot, DEFAULT_ADMIN_SOCKET};
 use std::path::PathBuf;
 use std::sync::Arc;
-use vproxy_server::{Accounts, Server, Settings, Snapshot, DEFAULT_ADMIN_SOCKET};
 
 mod tui;
 
-const USAGE: &str = "usage: vproxy-server -c server.toml [-v]\n       vproxy-server --stats [--admin <socket>]\n       vproxy-server --tui [--admin <socket>]";
+const USAGE: &str = "usage: ratatosk-server -c server.toml [-v]\n       ratatosk-server --stats [--admin <socket>]\n       ratatosk-server --tui [--admin <socket>]";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -38,7 +38,7 @@ async fn main() -> Result<()> {
         if tui {
             return tui::run(&path).await;
         }
-        let snap = vproxy_server::fetch_stats(&path).await?;
+        let snap = ratatosk_server::fetch_stats(&path).await?;
         print_stats(&snap);
         return Ok(());
     }

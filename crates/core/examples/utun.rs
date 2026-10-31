@@ -14,13 +14,13 @@
 //! Ctrl-C stops it.
 
 use anyhow::{bail, Context, Result};
+use ratatosk_core::netstack::device::channel_device;
+use ratatosk_core::netstack::fakedns::{FakeDns, DEFAULT_POOL};
+use ratatosk_core::netstack::flows::{FlowLog, DEFAULT_CAPACITY};
+use ratatosk_core::netstack::Netstack;
+use ratatosk_core::{ActiveServer, ProxyClient};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
-use vproxy_core::netstack::device::channel_device;
-use vproxy_core::netstack::fakedns::{FakeDns, DEFAULT_POOL};
-use vproxy_core::netstack::flows::{FlowLog, DEFAULT_CAPACITY};
-use vproxy_core::netstack::Netstack;
-use vproxy_core::{ActiveServer, ProxyClient};
 
 const MTU: u16 = 1500;
 
@@ -46,7 +46,7 @@ async fn main() -> Result<()> {
             .context("no link in the file")?
             .to_string()
     };
-    let config = vproxy_core::config::servers::config_from_link(&link, 0)?;
+    let config = ratatosk_core::config::servers::config_from_link(&link, 0)?;
     let connector = ProxyClient::new(
         ActiveServer::new(config.server.clone()),
         config.dns.clone(),

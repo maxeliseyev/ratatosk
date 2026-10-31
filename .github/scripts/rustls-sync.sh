@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Keeps the rustls fork current and vproxy pinned to it.
+# Keeps the rustls fork current and ratatosk pinned to it.
 #
-# vproxy builds against a fork of rustls 0.23 (branch reality-0.23) that adds
+# ratatosk builds against a fork of rustls 0.23 (branch reality-0.23) that adds
 # ClientConfig::session_id_hook and ClientConfig::client_hello_rewriter.
 # Upstream keeps publishing 0.23.x from its rel-0.23 branch, so the fork has
 # to follow it. This script, run weekly by .github/workflows/rustls-sync.yml:
 #
 #   1. fetches upstream rel-0.23 into a clone of the fork;
 #   2. if upstream moved: merges it into reality-0.23 (a merge, never a rebase,
-#      so every rev that vproxy ever pinned stays reachable), runs the rustls
+#      so every rev that ratatosk ever pinned stays reachable), runs the rustls
 #      test suite and pushes the fork;
 #   3. if the fork head differs from the rev pinned in Cargo.toml: bumps the
-#      rev, runs fmt/clippy/tests of vproxy and commits to main;
+#      rev, runs fmt/clippy/tests of ratatosk and commits to main;
 #   4. on a merge conflict or any other failure opens (or comments on) an issue;
 #   5. opens an issue once when upstream publishes rustls 0.24, because then the
 #      patches have to be ported to a new branch by hand.
@@ -24,7 +24,7 @@
 #   FORK_PUSH_URL    where to push the fork; the workflow uses an SSH deploy key
 #   DRY_RUN=1        never push, commit or file issues; in merge mode stop after
 #                    the rustls tests (the merged rev is not on GitHub yet, so
-#                    vproxy cannot be built against it)
+#                    ratatosk cannot be built against it)
 #   GH_TOKEN/GH_REPO issues are filed with gh in GH_REPO when GH_TOKEN is set
 #
 # Exit codes: 0 done or nothing to do, 2 merge conflict (issue filed), 1 error.
@@ -110,7 +110,7 @@ if [ -n "$released" ]; then
     file_issue "rustls 0.24 is out: port the $FORK_BRANCH patches" \
 "Upstream published $(echo "$released" | tr '\n' ' ').
 
-tokio-rustls, hyper-rustls and reqwest will move to 0.24 and \`$UPSTREAM_BRANCH\` will only get backports. The fork patches (session_id_hook, client_hello_rewriter, SCT tolerance in CertificateEntry) have to be ported to a new branch on top of 0.24 and vproxy repointed to it.
+tokio-rustls, hyper-rustls and reqwest will move to 0.24 and \`$UPSTREAM_BRANCH\` will only get backports. The fork patches (session_id_hook, client_hello_rewriter, SCT tolerance in CertificateEntry) have to be ported to a new branch on top of 0.24 and ratatosk repointed to it.
 
 Filed by $run_url" once
 fi
@@ -164,7 +164,7 @@ git merge upstream/$UPSTREAM_BRANCH
 cargo test -p rustls --locked --all-features --all-targets
 git push origin $FORK_BRANCH
 \`\`\`
-then re-run the sync workflow: it will bump \`rev\` in Cargo.toml and test vproxy.
+then re-run the sync workflow: it will bump \`rev\` in Cargo.toml and test ratatosk.
 
 Run: $run_url"
         exit 2
@@ -194,7 +194,7 @@ if [ "$mode" != none ]; then
     cargo update --quiet -p rustls
     git --no-pager diff --stat
 
-    log "Testing vproxy against the new fork"
+    log "Testing ratatosk against the new fork"
     cargo fmt --all --check
     # shellcheck disable=SC2086
     cargo clippy --workspace --all-targets -- $CLIPPY_FLAGS
@@ -213,7 +213,7 @@ if [ "$mode" != none ]; then
 Fork $FORK_REPO@$FORK_BRANCH is now at $fork_head.
 Merged and tested by $run_url"
     git push origin HEAD:main
-    summary "vproxy pinned to rustls fork $new ($upstream_tag), pushed to main"
+    summary "ratatosk pinned to rustls fork $new ($upstream_tag), pushed to main"
 else
     summary "Nothing to do: fork is at upstream $upstream_tag and Cargo.toml pins its head ($pinned)"
 fi

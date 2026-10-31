@@ -1,4 +1,4 @@
-//! `vproxy-server`: the server end of the h3 transport (see `vproxy_core::h3`
+//! `ratatosk-server`: the server end of the h3 transport (see `ratatosk_core::h3`
 //! and docs/h3-transport-plan.md). A QUIC endpoint with the domain's real
 //! certificate; a client that proves its account with the auth token gets
 //! each of its streams relayed to the TCP target it names.
@@ -16,6 +16,8 @@ pub use admin::{fetch as fetch_stats, DEFAULT_SOCKET as DEFAULT_ADMIN_SOCKET};
 pub use stats::{AccountSnapshot, Snapshot, Stats};
 
 use anyhow::{anyhow, bail, Context, Result};
+use ratatosk_core::h3::wire::{self, Status, ALPN};
+use ratatosk_core::protocol::vless::Address;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use serde::Deserialize;
@@ -30,8 +32,6 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
-use vproxy_core::h3::wire::{self, Status, ALPN};
-use vproxy_core::protocol::vless::Address;
 
 /// The account allow-list, swappable at runtime so a reload (SIGHUP in the
 /// binary) can replace it without dropping live connections. Read once per
@@ -50,13 +50,13 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// every 10 s while they want it).
 const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// A UDP session nobody sent on for this long is closed, as in vproxy.
+/// A UDP session nobody sent on for this long is closed, as in ratatosk.
 const UDP_IDLE: Duration = Duration::from_secs(120);
 /// UDP sessions per connection; the least recently used goes first.
 const MAX_UDP_SESSIONS: usize = 256;
 
 /// Same as the client's, so datagrams fit from the first packet.
-const INITIAL_MTU: u16 = vproxy_core::h3::client::INITIAL_MTU;
+const INITIAL_MTU: u16 = ratatosk_core::h3::client::INITIAL_MTU;
 
 /// `server.toml`:
 ///
@@ -80,7 +80,7 @@ pub struct Settings {
     /// Without it, ordinary HTTP/3 requests receive a neutral 404 response.
     #[serde(default)]
     pub site_backend: Option<String>,
-    /// Local Unix socket for live stats (`vproxy-server --stats`/`--tui`).
+    /// Local Unix socket for live stats (`ratatosk-server --stats`/`--tui`).
     /// Defaults to [`admin::DEFAULT_SOCKET`]; set to "" to turn it off.
     #[serde(default)]
     pub admin: Option<String>,

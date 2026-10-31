@@ -2,12 +2,12 @@
 //! get the answer through the packet callback, stop.
 
 use etherparse::{NetSlice, PacketBuilder, SlicedPacket, TransportSlice};
+use ratatosk_core::netstack::fakedns::{FakeDns, DEFAULT_POOL};
+use ratatosk_ffi::*;
 use std::ffi::{c_void, CStr, CString};
 use std::net::Ipv4Addr;
 use std::sync::mpsc;
 use std::time::Duration;
-use vproxy_core::netstack::fakedns::{FakeDns, DEFAULT_POOL};
-use vproxy_ffi::*;
 
 extern "C" fn collect(
     ctx: *mut c_void,

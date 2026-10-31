@@ -1,4 +1,4 @@
-# vproxy on OpenWrt — transparent whole-LAN router
+# ratatosk on OpenWrt — transparent whole-LAN router
 
 Turn an OpenWrt router into a transparent anti-censorship gateway: every device
 on its LAN egresses through the h3/QUIC transport to the exit server, with DNS
@@ -6,11 +6,11 @@ resolved inside the tunnel (no leak). Fail-closed — if the tunnel is down the
 LAN has no internet.
 
 ```
-LAN device ─▶ tun ─▶ sing-box ─▶ SOCKS ─▶ vproxy ─▶ h3/QUIC ─▶ exit server ─▶ internet
+LAN device ─▶ tun ─▶ sing-box ─▶ SOCKS ─▶ ratatosk ─▶ h3/QUIC ─▶ exit server ─▶ internet
             (gvisor) (DNS hijack → DoH over the proxy)   (Chrome-shaped QUIC)
 ```
 
-`vproxy` speaks our transport and exposes a local SOCKS5 inbound; `sing-box` is
+`ratatosk` speaks our transport and exposes a local SOCKS5 inbound; `sing-box` is
 the TUN + routing + DNS layer. sing-box resolves names with its own DoH **over
 the proxy** because raw UDP DNS through SOCKS is unreliable.
 
@@ -32,34 +32,34 @@ On the router (or over ssh):
 sh install.sh 'h3://<uuid>@<host>:443?sni=<host>#label'
 ```
 
-It installs the deps, fetches the `vproxy` binary for this arch from the GitHub
+It installs the deps, fetches the `ratatosk` binary for this arch from the GitHub
 release, writes the link, pins the exit host in `/etc/hosts`, generates the
-sing-box config, enables both services (`vproxy` then `sing-box`, as root), and
+sing-box config, enables both services (`ratatosk` then `sing-box`, as root), and
 starts them. Re-running is safe (idempotent). Verify:
 
 ```sh
 curl -s https://ipinfo.io/json      # should show the exit server's IP/city
 ```
 
-Env overrides: `VPROXY_VERSION`, `SERVER_IP` (skip the DNS lookup), `SOCKS_PORT`
+Env overrides: `RATATOSK_VERSION`, `SERVER_IP` (skip the DNS lookup), `SOCKS_PORT`
 (default 1080), `REPO` (GitHub `owner/repo` of the release).
 
 ## What it configures
 
 | Path | Purpose |
 |------|---------|
-| `/usr/bin/vproxy` | the client binary (static aarch64/x86_64 musl) |
-| `/etc/vproxy/link` | the `h3://` connection link (mode 600) |
-| `/etc/init.d/vproxy` | procd service, SOCKS5 on `127.0.0.1:1080` |
+| `/usr/bin/ratatosk` | the client binary (static aarch64/x86_64 musl) |
+| `/etc/ratatosk/link` | the `h3://` connection link (mode 600) |
+| `/etc/init.d/ratatosk` | procd service, SOCKS5 on `127.0.0.1:1080` |
 | `/etc/sing-box/config.json` | tun + DNS-hijack + routing (gvisor stack) |
 | `/etc/config/sing-box` | uci: `user root`, `enabled 1` |
 | `/etc/config/firewall` | a `proxy` zone (tun0, masq, MSS clamp) + `lan → proxy` forwarding |
 | `/etc/hotplug.d/net/99-proxy-fw` | reloads fw4 when tun0 appears (boot order) |
 | `/etc/hosts` | pins `<exit-host> -> <ip>` (see note) |
 
-**Why the `/etc/hosts` pin matters:** without it, vproxy's own DNS lookup of the
+**Why the `/etc/hosts` pin matters:** without it, ratatosk's own DNS lookup of the
 exit host is pulled into the tunnel it is still building → deadlock. The pin
-lets vproxy connect by IP, and the sing-box route rule `<ip>/32 → direct` keeps
+lets ratatosk connect by IP, and the sing-box route rule `<ip>/32 → direct` keeps
 its QUIC off the tunnel (no loop).
 
 ## Wi-Fi
@@ -83,13 +83,13 @@ uci commit wireless && wifi reload
 ```sh
 /etc/init.d/sing-box stop      # pause the tunnel (LAN goes direct)
 /etc/init.d/sing-box start
-logread | grep -i vproxy        # vproxy logs
+logread | grep -i ratatosk        # ratatosk logs
 cat /tmp/sb.log                 # sing-box logs
 ```
 
 ## Notes & limits
 
-- **Fail-closed** and a brief boot window: `vproxy` (START 95) comes up before
+- **Fail-closed** and a brief boot window: `ratatosk` (START 95) comes up before
   `sing-box` (99), so for a second or two at boot traffic may go direct.
 - UDP DNS over the proxy does not work; DNS goes over DoH (TCP) instead.
 - This is an install script, not yet a real feed package (`.apk`/`.ipk` built

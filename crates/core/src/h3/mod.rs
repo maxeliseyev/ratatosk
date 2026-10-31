@@ -1,4 +1,4 @@
-//! The h3 transport: one QUIC connection to our own server (`vproxy-server`),
+//! The h3 transport: one QUIC connection to our own server (`ratatosk-server`),
 //! every TCP target a bidirectional stream on it. The plan and the reasons
 //! are in docs/h3-transport-plan.md.
 //!

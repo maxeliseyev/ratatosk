@@ -1,4 +1,12 @@
 use anyhow::{anyhow, Result};
+use ratatosk_core::inbound::socks5;
+use ratatosk_core::protocol::mux;
+use ratatosk_core::protocol::vless;
+use ratatosk_core::transport::ws::WsStream;
+use ratatosk_core::{
+    serve, serve_with_server, ActiveServer, Config, DnsCacheConfig, DnsConfig, InboundConfig,
+    MuxConfig, RoutingConfig, RoutingRule, RuntimeConfig, ServerConfig,
+};
 use std::future::Future;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
@@ -8,14 +16,6 @@ use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout};
 use uuid::Uuid;
-use vproxy_core::inbound::socks5;
-use vproxy_core::protocol::mux;
-use vproxy_core::protocol::vless;
-use vproxy_core::transport::ws::WsStream;
-use vproxy_core::{
-    serve, serve_with_server, ActiveServer, Config, DnsCacheConfig, DnsConfig, InboundConfig,
-    MuxConfig, RoutingConfig, RoutingRule, RuntimeConfig, ServerConfig,
-};
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -567,7 +567,7 @@ fn proxy_config(
     }
 }
 
-/// The mock must see the path and Host header vproxy was configured with.
+/// The mock must see the path and Host header ratatosk was configured with.
 #[allow(clippy::result_large_err)]
 fn check_ws_upgrade(
     req: &tokio_tungstenite::tungstenite::handshake::server::Request,
@@ -809,10 +809,10 @@ fn reserve_port() -> Result<u16> {
 // --- netstack: hand-built IP packets through the in-process TUN ---
 
 use etherparse::{NetSlice, PacketBuilder, SlicedPacket, TransportSlice};
-use vproxy_core::netstack::device::{channel_device, HostPackets};
-use vproxy_core::netstack::fakedns::{FakeDns, DEFAULT_POOL};
-use vproxy_core::netstack::flows::FlowLog;
-use vproxy_core::netstack::Netstack;
+use ratatosk_core::netstack::device::{channel_device, HostPackets};
+use ratatosk_core::netstack::fakedns::{FakeDns, DEFAULT_POOL};
+use ratatosk_core::netstack::flows::FlowLog;
+use ratatosk_core::netstack::Netstack;
 
 const APP_IP: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 2);
 
@@ -927,7 +927,7 @@ fn spawn_netstack(
         RoutingConfig::default(),
         "tcp",
     );
-    let connector = vproxy_core::ProxyClient::new(
+    let connector = ratatosk_core::ProxyClient::new(
         ActiveServer::new(config.server.clone()),
         config.dns.clone(),
         config.runtime.clone(),

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  System-wide ratatosk (TUN mode) as a launchd daemon on macOS.
+
+  Preferred: `sudo ratatosk service install --tun -f server.txt` generates and loads this for you.
+  Manual way:
+
+  install:
+    sudo cp target/release/ratatosk /usr/local/bin/ratatosk
+    sudo mkdir -p /usr/local/etc/ratatosk && sudo cp config.toml /usr/local/etc/ratatosk/config.toml   # set tun.enabled = true
+    sudo cp docs/launchd/com.ratatosk.tun.plist /Library/LaunchDaemons/
+    sudo launchctl bootstrap system /Library/LaunchDaemons/com.ratatosk.tun.plist
+  stop / remove:
+    sudo launchctl bootout system/com.ratatosk.tun
+  logs:
+    tail -f /var/log/ratatosk.log
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.ratatosk.tun</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/ratatosk</string>
+    <string>--config</string>
+    <string>/usr/local/etc/ratatosk/config.toml</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- so `sing-box` from Homebrew is found; or set tun.sing_box_path in config.toml -->
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/var/log/ratatosk.log</string>
+  <key>StandardErrorPath</key><string>/var/log/ratatosk.log</string>
+</dict>
+</plist>

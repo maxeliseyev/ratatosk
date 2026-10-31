@@ -9,7 +9,7 @@
 #   --  долгое соединение: 10 МБ со скоростью 50 КБ/с (около 200 с) по одному QUIC-соединению
 #   H6  4 параллельных QUIC-соединения, потом проверка, не заморозило ли домен
 #   H3  iperf3 UDP 10 Мбит/с 60 с (-i host:port), «неизвестный UDP» против QUIC
-#   H0  vproxy с двумя REALITY-ссылками (-f): fp=chrome и fp=chrome133, 10 МБ через прокси
+#   H0  ratatosk с двумя REALITY-ссылками (-f): fp=chrome и fp=chrome133, 10 МБ через прокси
 #
 # Нужен curl с HTTP/3 (строка Features в `curl --version` содержит HTTP3):
 #   macOS: brew install curl (скрипт сам найдёт /opt/homebrew/opt/curl/bin/curl)
@@ -25,7 +25,7 @@ set -u
 VERSION=1
 NETWORK=""
 LINKS=""
-VPROXY_BIN=""
+RATATOSK_BIN=""
 IPERF=""
 ROUNDS=1
 OUT="."
@@ -43,7 +43,7 @@ usage() {
 
   -n "сеть"      оператор, моб/провод, регион (спросит, если не задано)
   -f файл        файл ссылок vless:// для H0: две строки на один сервер, fp=chrome и fp=chrome133
-  -b путь        бинарник vproxy (по умолчанию ищется в PATH, ./vproxy, ./target/release/vproxy)
+  -b путь        бинарник ratatosk (по умолчанию ищется в PATH, ./ratatosk, ./target/release/ratatosk)
   -i host:port   сервер iperf3 для H3 (UDP)
   -r N           число прогонов, между ними пауза ${PAUSE} с (по умолчанию 1)
   -o папка       куда писать отчёт и лог (по умолчанию текущая)
@@ -59,7 +59,7 @@ while getopts "n:f:b:i:r:o:qkh" opt; do
     case $opt in
         n) NETWORK=$OPTARG ;;
         f) LINKS=$OPTARG ;;
-        b) VPROXY_BIN=$OPTARG ;;
+        b) RATATOSK_BIN=$OPTARG ;;
         i) IPERF=$OPTARG ;;
         r) ROUNDS=$OPTARG ;;
         o) OUT=$OPTARG ;;
@@ -93,10 +93,10 @@ mkdir -p "$OUT"
 REPORT="$OUT/tspu-trial-$STAMP.txt"
 LOG="$OUT/tspu-trial-$STAMP.log"
 TMP=$(mktemp -d 2>/dev/null || mktemp -d -t tspu)
-VPROXY_PID=""
+RATATOSK_PID=""
 
 cleanup() {
-    [ -n "$VPROXY_PID" ] && kill "$VPROXY_PID" 2>/dev/null
+    [ -n "$RATATOSK_PID" ] && kill "$RATATOSK_PID" 2>/dev/null
     rm -rf "$TMP"
 }
 trap cleanup EXIT INT TERM
@@ -231,13 +231,13 @@ for v in http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy; do
 done
 
 if [ -n "$LINKS" ]; then
-    if [ -z "$VPROXY_BIN" ]; then
-        for c in "$(command -v vproxy 2>/dev/null)" ./vproxy ./target/release/vproxy; do
-            [ -n "$c" ] && [ -x "$c" ] && { VPROXY_BIN=$c; break; }
+    if [ -z "$RATATOSK_BIN" ]; then
+        for c in "$(command -v ratatosk 2>/dev/null)" ./ratatosk ./target/release/ratatosk; do
+            [ -n "$c" ] && [ -x "$c" ] && { RATATOSK_BIN=$c; break; }
         done
     fi
-    if [ -z "$VPROXY_BIN" ] || [ ! -x "$VPROXY_BIN" ]; then
-        echo "vproxy не найден, укажите -b путь/к/vproxy" >&2
+    if [ -z "$RATATOSK_BIN" ] || [ ! -x "$RATATOSK_BIN" ]; then
+        echo "ratatosk не найден, укажите -b путь/к/ratatosk" >&2
         exit 1
     fi
     if [ ! -r "$LINKS" ]; then
@@ -256,7 +256,7 @@ say "=== Испытания HTTP/3-транспорта, скрипт v$VERSION 
 say "Дата (МСК): $(msk)"
 say "Сеть: $NETWORK"
 say "ОС: $OS; curl $CURL_VERSION, HTTP/3: $([ $H3_CURL = 1 ] && echo да || echo нет)"
-[ -n "$LINKS" ] && say "vproxy: $("$VPROXY_BIN" --version 2>/dev/null | head -1)"
+[ -n "$LINKS" ] && say "ratatosk: $("$RATATOSK_BIN" --version 2>/dev/null | head -1)"
 
 INFO=$("$CURL_BIN" -s --max-time 6 https://ipinfo.io/json 2>>"$LOG" || true)
 if [ -n "$INFO" ]; then
@@ -397,7 +397,7 @@ test_iperf() {
     fi
 }
 
-test_vproxy() {
+test_ratatosk() {
     local base=$1 n=0 line fp name port
     while IFS= read -r line || [ -n "$line" ]; do
         case $line in
@@ -409,19 +409,19 @@ test_vproxy() {
         name=$(printf '%s' "$line" | sed -n 's/.*#\(.*\)$/\1/p')
         port=$((PROXY_PORT + n))
         printf '%s\n' "$line" >"$TMP/link.$n"
-        note "  vproxy ссылка $n (fp=$fp${name:+, $name}) на порту $port ..."
-        "$VPROXY_BIN" -f "$TMP/link.$n" -p "$port" </dev/null >"$TMP/vproxy.$n.log" 2>&1 &
-        VPROXY_PID=$!
+        note "  ratatosk ссылка $n (fp=$fp${name:+, $name}) на порту $port ..."
+        "$RATATOSK_BIN" -f "$TMP/link.$n" -p "$port" </dev/null >"$TMP/ratatosk.$n.log" 2>&1 &
+        RATATOSK_PID=$!
         local w=0
         while [ $w -lt 100 ] && ! port_open "$port"; do
             sleep 0.1
             w=$((w + 1))
         done
         if ! port_open "$port"; then
-            row "H0" "fail" "fp=$fp: vproxy не открыл порт $port за 10 с, см. лог"
-            cat "$TMP/vproxy.$n.log" >>"$LOG"
-            kill "$VPROXY_PID" 2>/dev/null
-            VPROXY_PID=""
+            row "H0" "fail" "fp=$fp: ratatosk не открыл порт $port за 10 с, см. лог"
+            cat "$TMP/ratatosk.$n.log" >>"$LOG"
+            kill "$RATATOSK_PID" 2>/dev/null
+            RATATOSK_PID=""
             continue
         fi
         # первый запрос = REALITY handshake + маленький ответ
@@ -435,11 +435,11 @@ test_vproxy() {
             d="$d; ${SMALL#/} через прокси: $(details_download "$v")"
         fi
         row "H0" "$v" "fp=$fp${name:+ ($name)}: $d"
-        kill "$VPROXY_PID" 2>/dev/null
-        wait "$VPROXY_PID" 2>/dev/null
-        VPROXY_PID=""
-        raw "--- vproxy $n (fp=$fp) ---"
-        grep -E 'handshake|JA4|ERROR|WARN|error' "$TMP/vproxy.$n.log" >>"$LOG"
+        kill "$RATATOSK_PID" 2>/dev/null
+        wait "$RATATOSK_PID" 2>/dev/null
+        RATATOSK_PID=""
+        raw "--- ratatosk $n (fp=$fp) ---"
+        grep -E 'handshake|JA4|ERROR|WARN|error' "$TMP/ratatosk.$n.log" >>"$LOG"
         sleep 5
     done <"$LINKS"
     [ $n -gt 0 ] || row "H0" "skip" "в файле $LINKS нет ссылок"
@@ -456,8 +456,8 @@ run_round() {
     fi
     if [ -n "$LINKS" ]; then
         say ""
-        say "--- vproxy, REALITY (H0) ---"
-        test_vproxy "${DOMAINS# }"
+        say "--- ratatosk, REALITY (H0) ---"
+        test_ratatosk "${DOMAINS# }"
     fi
 }
 

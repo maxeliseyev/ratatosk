@@ -2,7 +2,7 @@ name: rustls fork sync
 
 # Weekly: merge upstream rustls rel-0.23 into the fork branch reality-0.23,
 # run the rustls tests, push the fork, bump the pinned rev in Cargo.toml, run
-# the vproxy checks and commit to main. Conflicts and failures become issues.
+# the ratatosk checks and commit to main. Conflicts and failures become issues.
 # All the logic lives in .github/scripts/rustls-sync.sh (runnable locally).
 
 on:

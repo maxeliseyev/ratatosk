@@ -1,4 +1,4 @@
-//! The list of servers vproxy can switch between at runtime: every
+//! The list of servers ratatosk can switch between at runtime: every
 //! `vless://` link of the links file (or the single server of a TOML/JSON
 //! config), plus persistence of the chosen one as the file's first link.
 

@@ -4,12 +4,12 @@
 
 | Каталог | Cargo-пакет | Ответственность |
 |---|---|---|
-| `crates/core` | `vproxy-core` | Конфигурация, VLESS/REALITY/Vision/Mux, транспорты, h3-клиент, routing, DNS, SOCKS5/HTTP, userspace netstack |
-| `crates/cli` | `vproxy` | Бинарник `vproxy`, TUI, журнал, сигналы desktop-приложения, службы, TUN через sing-box и xray-sidecar |
-| `crates/server` | `vproxy-server` | Сервер QUIC-транспорта, аутентификация и соединения с целями |
-| `crates/ffi` | `vproxy-ffi` | C ABI и Swift-обёртки для Ratatosk, staticlib и заголовки |
+| `crates/core` | `ratatosk-core` | Конфигурация, VLESS/REALITY/Vision/Mux, транспорты, h3-клиент, routing, DNS, SOCKS5/HTTP, userspace netstack |
+| `crates/cli` | `ratatosk` | Бинарник `ratatosk`, TUI, журнал, сигналы desktop-приложения, службы, TUN через sing-box и xray-sidecar |
+| `crates/server` | `ratatosk-server` | Сервер QUIC-транспорта, аутентификация и соединения с целями |
+| `crates/ffi` | `ratatosk-ffi` | C ABI и Swift-обёртки для Ratatosk, staticlib и заголовки |
 
-CLI, сервер и FFI зависят от `vproxy-core`. Ядро не зависит от них,
+CLI, сервер и FFI зависят от `ratatosk-core`. Ядро не зависит от них,
 не включает TUI, не устанавливает службы и не запускает внешние процессы.
 Нативные локальные inbound-протоколы остаются в ядре, чтобы ими могли
 пользоваться разные оболочки.
@@ -22,30 +22,31 @@ CLI, сервер и FFI зависят от `vproxy-core`. Ядро не зав
 ## Команды
 
 ```sh
-cargo build -p vproxy                     # target/debug/vproxy
-cargo run -p vproxy -- --help
-cargo build -p vproxy-server              # target/debug/vproxy-server
+cargo build -p ratatosk                     # target/debug/ratatosk
+cargo run -p ratatosk -- --help
+cargo build -p ratatosk-server              # target/debug/ratatosk-server
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked
 cargo fmt --all --check
 
-cargo build -p vproxy-core --lib --target aarch64-apple-ios
-cargo build -p vproxy-ffi --target aarch64-apple-ios
+cargo build -p ratatosk-core --lib --target aarch64-apple-ios
+cargo build -p ratatosk-ffi --target aarch64-apple-ios
 scripts/build-xcframework.sh
 ```
 
 `cargo build` и `cargo test` без `-p` выбирают ядро и CLI. Для всех четырёх
 пакетов нужен `--workspace`. Примеры сетевого ядра лежат в
-`crates/core/examples` и запускаются через `cargo run -p vproxy-core --example …`.
+`crates/core/examples` и запускаются через `cargo run -p ratatosk-core --example …`.
 Интеграционные тесты лежат рядом со своим пакетом в его `tests/`.
 
 Версия CLI и ядра задаётся в `[workspace.package]` корневого `Cargo.toml`.
-Форк rustls и профили сборки также задаются только в корне. Имена бинарников,
-`libvproxy_ffi.a`, C API `ratatosk_*` и `RatatoskCore.xcframework` сохранены.
-Rust-импорт ядра теперь называется `vproxy_core`, например:
+Форк rustls и профили сборки также задаются только в корне. Бинарники —
+`ratatosk` и `ratatosk-server`, staticlib — `libratatosk_ffi.a`, C API —
+`ratatosk_*`, XCFramework — `RatatoskCore.xcframework`. Rust-импорт ядра
+называется `ratatosk_core`, например:
 
 ```rust
-use vproxy_core::{Config, ProxyClient};
+use ratatosk_core::{Config, ProxyClient};
 ```
 
 ## Развёртывание и содержимое сайта
@@ -74,6 +75,7 @@ use vproxy_core::{Config, ProxyClient};
 | `server/` | `crates/server/` |
 | `ffi/` | `crates/ffi/` |
 | `tests/`, `examples/` | `crates/core/tests/`, `crates/core/examples/` |
+| `~/.config/vproxy`, `com.vproxy.*`, `vproxy.service` | `~/.config/ratatosk`, `com.ratatosk.*`, `ratatosk.service` |
 
 Внешнему Xcode-проекту, который читает заголовки и Swift-файлы из исходников,
 нужно обновить пути на `crates/ffi/include` и `crates/ffi/swift`. Путь готового

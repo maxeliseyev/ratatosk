@@ -2273,6 +2273,113 @@ dependencies = [
 ]
 
 [[package]]
+name = "ratatosk"
+version = "0.18.6"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "flate2",
+ "libc",
+ "ratatosk-core",
+ "ratatui",
+ "reqwest",
+ "serde_json",
+ "tar",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "tun-rs",
+ "uuid",
+]
+
+[[package]]
+name = "ratatosk-core"
+version = "0.18.6"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "aws-lc-rs",
+ "base64",
+ "bytes",
+ "etherparse",
+ "flate2",
+ "futures-util",
+ "hkdf",
+ "hmac",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "idna",
+ "ipstack",
+ "libc",
+ "quinn",
+ "rand 0.8.6",
+ "rcgen",
+ "reqwest",
+ "rustls",
+ "rustls-native-certs",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
+ "tokio-util",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "tun-rs",
+ "uuid",
+ "webpki-roots 0.26.11",
+ "x25519-dalek",
+ "x509-parser",
+]
+
+[[package]]
+name = "ratatosk-ffi"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "etherparse",
+ "ratatosk-core",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "ratatosk-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "crossterm",
+ "h3",
+ "h3-datagram",
+ "h3-quinn",
+ "h3-webtransport",
+ "http",
+ "quinn",
+ "ratatosk-core",
+ "ratatui",
+ "rcgen",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "ratatui"
 version = "0.30.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3502,113 +3609,6 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
-
-[[package]]
-name = "vproxy"
-version = "0.18.6"
-dependencies = [
- "anyhow",
- "crossterm",
- "flate2",
- "libc",
- "ratatui",
- "reqwest",
- "serde_json",
- "tar",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "tun-rs",
- "uuid",
- "vproxy-core",
-]
-
-[[package]]
-name = "vproxy-core"
-version = "0.18.6"
-dependencies = [
- "aes-gcm",
- "anyhow",
- "aws-lc-rs",
- "base64",
- "bytes",
- "etherparse",
- "flate2",
- "futures-util",
- "hkdf",
- "hmac",
- "http",
- "http-body-util",
- "hyper",
- "hyper-util",
- "idna",
- "ipstack",
- "libc",
- "quinn",
- "rand 0.8.6",
- "rcgen",
- "reqwest",
- "rustls",
- "rustls-native-certs",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "tokio",
- "tokio-rustls",
- "tokio-tungstenite",
- "tokio-util",
- "toml",
- "tracing",
- "tracing-subscriber",
- "tun-rs",
- "uuid",
- "webpki-roots 0.26.11",
- "x25519-dalek",
- "x509-parser",
-]
-
-[[package]]
-name = "vproxy-ffi"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "etherparse",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "vproxy-core",
-]
-
-[[package]]
-name = "vproxy-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytes",
- "crossterm",
- "h3",
- "h3-datagram",
- "h3-quinn",
- "h3-webtransport",
- "http",
- "quinn",
- "ratatui",
- "rcgen",
- "reqwest",
- "rustls",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "vproxy-core",
-]
 
 [[package]]
 name = "vtparse"

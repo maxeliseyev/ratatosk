@@ -1,4 +1,4 @@
-// Calls of the vproxy core that need no tunnel: server ping and subscription
+// Calls of the ratatosk core that need no tunnel: server ping and subscription
 // download. Shared by the app and the Packet Tunnel extension (the app
 // pings itself while the VPN is off; with it on, the extension pings, since
 // the app's own sockets would go through the tunnel). Both block: call them

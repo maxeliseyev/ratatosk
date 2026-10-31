@@ -1,12 +1,12 @@
 #!/bin/sh
-# vproxy on OpenWrt: a transparent, whole-LAN anti-censorship router.
+# ratatosk on OpenWrt: a transparent, whole-LAN anti-censorship router.
 #
 # Routes every device on the router's LAN through the h3/QUIC transport to the
 # exit server, with DNS resolved inside the tunnel (no leak). Chain:
 #
-#   LAN device -> tun -> sing-box -> SOCKS -> vproxy -> h3/QUIC -> exit server
+#   LAN device -> tun -> sing-box -> SOCKS -> ratatosk -> h3/QUIC -> exit server
 #
-# vproxy speaks our transport and offers a local SOCKS5 inbound; sing-box is the
+# ratatosk speaks our transport and offers a local SOCKS5 inbound; sing-box is the
 # TUN + routing + DNS layer (sing-box's own DoH runs over the proxy, since raw
 # UDP DNS over SOCKS is unreliable). Requires an aarch64 or x86_64 OpenWrt
 # device (the aws-lc-rs crypto core has no MIPS/ARMv7 build) with ~20 MB free on
@@ -16,21 +16,21 @@
 #   sh install.sh 'h3://<uuid>@<host>:443?sni=<host>#label'
 # Re-running is safe (idempotent); it reconfigures in place.
 #
-# Env overrides: VPROXY_VERSION (default below), SERVER_IP (skip DNS lookup),
+# Env overrides: RATATOSK_VERSION (default below), SERVER_IP (skip DNS lookup),
 # SOCKS_PORT (default 1080), REPO (GitHub owner/repo of the release).
 set -eu
 
-VPROXY_VERSION="${VPROXY_VERSION:-0.18.6}"
+RATATOSK_VERSION="${RATATOSK_VERSION:-${VPROXY_VERSION:-0.18.6}}"
 SOCKS_PORT="${SOCKS_PORT:-1080}"
-REPO="${REPO:-maxeliseyev/vless-proxy}"
+REPO="${REPO:-maxeliseyev/ratatosk}"
 
-LINK="${1:-$(cat /etc/vproxy/link 2>/dev/null || true)}"
+LINK="${1:-$(cat /etc/ratatosk/link 2>/dev/null || cat /etc/vproxy/link 2>/dev/null || true)}"
 [ -n "$LINK" ] || { echo "usage: sh install.sh 'h3://<uuid>@<host>:443?sni=<host>#label'" >&2; exit 1; }
 
 # --- parse the exit host out of the link ------------------------------------
 HOST=$(printf '%s' "$LINK" | sed -E 's#^[a-z0-9]+://[^@]*@([^:/?#]+).*#\1#')
 [ -n "$HOST" ] && [ "$HOST" != "$LINK" ] || { echo "cannot parse host from link" >&2; exit 1; }
-echo ">> exit host: $HOST  (vproxy $VPROXY_VERSION)"
+echo ">> exit host: $HOST  (ratatosk $RATATOSK_VERSION)"
 
 # --- arch guard + release asset name ----------------------------------------
 ARCH=$(uname -m)
@@ -52,24 +52,37 @@ fi
 modprobe tun 2>/dev/null || true
 [ -e /dev/net/tun ] || { echo "no /dev/net/tun after loading kmod-tun" >&2; exit 1; }
 
-# --- vproxy binary (from the GitHub release, if not already this version) ---
-if ! /usr/bin/vproxy --version 2>/dev/null | grep -q "$VPROXY_VERSION"; then
-  TGZ="vproxy-linux-${ASSET}-musl.tar.gz"
-  URL="https://github.com/$REPO/releases/download/v${VPROXY_VERSION}/$TGZ"
+# --- ratatosk binary (from the GitHub release, if not already this version) ---
+if ! /usr/bin/ratatosk --version 2>/dev/null | grep -q "$RATATOSK_VERSION"; then
+  PKG="ratatosk-linux-${ASSET}-musl"
+  TGZ="$PKG.tar.gz"
+  URL="https://github.com/$REPO/releases/download/v${RATATOSK_VERSION}/$TGZ"
   echo ">> downloading $URL"
-  curl -fsSL -o "/tmp/$TGZ" "$URL"
+  if ! curl -fsSL -o "/tmp/$TGZ" "$URL"; then
+    # Releases cut before the rename still carry vproxy-* assets.
+    PKG="vproxy-linux-${ASSET}-musl"
+    TGZ="$PKG.tar.gz"
+    URL="https://github.com/$REPO/releases/download/v${RATATOSK_VERSION}/$TGZ"
+    echo ">> no ratatosk asset; trying legacy $URL"
+    curl -fsSL -o "/tmp/$TGZ" "$URL"
+  fi
   tar xzf "/tmp/$TGZ" -C /tmp
-  install -m 0755 "/tmp/vproxy-linux-${ASSET}-musl/vproxy" /usr/bin/vproxy
-  rm -rf "/tmp/$TGZ" "/tmp/vproxy-linux-${ASSET}-musl"
+  BIN="/tmp/$PKG/ratatosk"
+  [ -x "$BIN" ] || BIN="/tmp/$PKG/vproxy"
+  install -m 0755 "$BIN" /usr/bin/ratatosk
+  rm -rf "/tmp/$TGZ" "/tmp/$PKG"
 fi
-echo ">> vproxy: $(/usr/bin/vproxy --version)"
+echo ">> ratatosk: $(/usr/bin/ratatosk --version)"
 
-# --- link + pin the exit host so vproxy resolves it WITHOUT the tunnel ------
-# (otherwise vproxy's own DNS for the exit host is pulled into the tunnel it is
+# --- link + pin the exit host so ratatosk resolves it WITHOUT the tunnel ------
+# (otherwise ratatosk's own DNS for the exit host is pulled into the tunnel it is
 # trying to build -> deadlock). The pin + the route rule keep its QUIC direct.
-mkdir -p /etc/vproxy
-printf '%s\n' "$LINK" > /etc/vproxy/link
-chmod 600 /etc/vproxy/link
+mkdir -p /etc/ratatosk
+if [ -f /etc/vproxy/link ] && [ ! -f /etc/ratatosk/link ]; then
+  mv /etc/vproxy/link /etc/ratatosk/link
+fi
+printf '%s\n' "$LINK" > /etc/ratatosk/link
+chmod 600 /etc/ratatosk/link
 
 IP="${SERVER_IP:-}"
 if [ -z "$IP" ]; then
@@ -80,18 +93,24 @@ sed -i "/[[:space:]]$HOST\$/d" /etc/hosts 2>/dev/null || true
 echo "$IP $HOST" >> /etc/hosts
 echo ">> pinned $HOST -> $IP in /etc/hosts"
 
-# --- vproxy procd service (SOCKS5 on loopback) ------------------------------
-cat > /etc/init.d/vproxy <<INIT
+# --- ratatosk procd service (SOCKS5 on loopback) ------------------------------
+# Stop and remove a service left by a pre-rename install.
+if [ -f /etc/init.d/vproxy ]; then
+  /etc/init.d/vproxy stop 2>/dev/null || true
+  /etc/init.d/vproxy disable 2>/dev/null || true
+  rm -f /etc/init.d/vproxy
+fi
+cat > /etc/init.d/ratatosk <<INIT
 #!/bin/sh /etc/rc.common
-# vproxy h3 client — local SOCKS5 inbound; sing-box routes the LAN into it.
+# ratatosk h3 client — local SOCKS5 inbound; sing-box routes the LAN into it.
 USE_PROCD=1
 START=95
 STOP=10
-PROG=/usr/bin/vproxy
+PROG=/usr/bin/ratatosk
 
 start_service() {
     procd_open_instance
-    procd_set_param command "\$PROG" -f /etc/vproxy/link -l 127.0.0.1 -p $SOCKS_PORT
+    procd_set_param command "\$PROG" -f /etc/ratatosk/link -l 127.0.0.1 -p $SOCKS_PORT
     procd_set_param respawn
     procd_set_param stdout 1
     procd_set_param stderr 1
@@ -99,8 +118,8 @@ start_service() {
     procd_close_instance
 }
 INIT
-chmod 0755 /etc/init.d/vproxy
-/etc/init.d/vproxy enable
+chmod 0755 /etc/init.d/ratatosk
+/etc/init.d/ratatosk enable
 
 # --- sing-box config: tun + DNS-hijack (DoH over the proxy) + routing -------
 mkdir -p /etc/sing-box
@@ -178,9 +197,9 @@ cat > /etc/hotplug.d/net/99-proxy-fw <<'HP'
 HP
 chmod 0755 /etc/hotplug.d/net/99-proxy-fw
 
-# --- (re)start, vproxy first so sing-box's SOCKS outbound has a listener ----
+# --- (re)start, ratatosk first so sing-box's SOCKS outbound has a listener ----
 echo ">> starting services"
-/etc/init.d/vproxy restart
+/etc/init.d/ratatosk restart
 sleep 2
 /etc/init.d/sing-box restart
 sleep 6

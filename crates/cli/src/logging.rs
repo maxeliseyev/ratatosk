@@ -1,4 +1,4 @@
-//! Size-capped log file with rotation: `vproxy.log`, `vproxy.log.1`, …
+//! Size-capped log file with rotation: `ratatosk.log`, `ratatosk.log.1`, …
 //! Used by the TUI, which otherwise keeps logs only in memory.
 
 use std::fs::{self, File, OpenOptions};
@@ -44,7 +44,7 @@ impl RotatingFile {
     pub fn write_session_header(&mut self) -> io::Result<()> {
         writeln!(
             self,
-            "--- vproxy {} started {} UTC ---",
+            "--- ratatosk {} started {} UTC ---",
             env!("CARGO_PKG_VERSION"),
             utc_now()
         )

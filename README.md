@@ -3,29 +3,36 @@
 **Ratatosk** — набор инструментов для устойчивого к цензуре доступа в интернет с **собственной реализацией ядра** на Rust: REALITY и XTLS Vision написаны с нуля (а не делегированы xray-core), плюс собственный транспорт QUIC/HTTP-3 с клиентом и сервером. Раньше проект назывался vproxy и был обычным VLESS-клиентом; теперь это шире, чем прокси.
 
 Состав:
-- **`vproxy`** — терминальный клиент для macOS/Linux: один бинарник, локальный SOCKS5/HTTP-прокси или системный VPN через TUN, TUI со статистикой, routing-правила.
-- **`vproxy-server`** — серверный конец QUIC/HTTP-3-транспорта; обычным HTTP/3-клиентам отдаёт настоящий сайт (см. [docs/h3-transport-plan.md](docs/h3-transport-plan.md)).
-- **ядро** (крейт `vproxy-core`) — REALITY, Vision, транспорты, netstack; общее для клиента, сервера и iOS.
+- **`ratatosk`** — терминальный клиент для macOS/Linux: один бинарник, локальный SOCKS5/HTTP-прокси или системный VPN через TUN, TUI со статистикой, routing-правила.
+- **`ratatosk-server`** — серверный конец QUIC/HTTP-3-транспорта; обычным HTTP/3-клиентам отдаёт настоящий сайт (см. [docs/h3-transport-plan.md](docs/h3-transport-plan.md)).
+- **ядро** (крейт `ratatosk-core`) — REALITY, Vision, транспорты, netstack; общее для клиента, сервера и iOS.
 - **Ratatosk (iOS)** — приложение на этом ядре, одноимённое зонтичному проекту ([отдельный репозиторий](https://github.com/maxeliseyev/ratatosk-ios)).
 
-Имена бинарников, крейтов и образов (`vproxy`, `vproxy-server`) пока прежние — переименование артефактов под зонтичное имя запланировано отдельным релизом. Подробный план и история решений: [`ROADMAP.md`](ROADMAP.md).
+Имена крейтов, бинарников и образов теперь `ratatosk` / `ratatosk-server`; переименование из `vproxy` состоялось в этом релизе. Подробный план и история решений: [`ROADMAP.md`](ROADMAP.md).
+
+### Переезд с vproxy
+
+- Старый каталог `~/.config/vproxy` продолжает использоваться автоматически, пока рядом нет `~/.config/ratatosk`. Чтобы перейти на новое имя, просто перенесите каталог: `mv ~/.config/vproxy ~/.config/ratatosk`.
+- Сервис нужно переустановить новым бинарником: `ratatosk service install …`. Старый launchd/systemd-юнит будет остановлен и удалён автоматически.
+- Переменные `VPROXY_VERSION`, `VPROXY_PREFIX`, `VPROXY_REPO`, `VPROXY_LIBC` в `install.sh` всё ещё принимаются как fallback.
+- Транспорт совместим: TLS-exporter label аутентификации намеренно оставлен `vproxy h3 auth`, поэтому новые клиенты работают со старыми серверами и наоборот.
 
 ## Установка
 
-Готовые сборки для macOS (Apple Silicon и Intel) и Linux (x86-64 и arm64, glibc и статические musl для Alpine) в [GitHub Releases](https://github.com/maxeliseyev/vless-proxy/releases):
+Готовые сборки для macOS (Apple Silicon и Intel) и Linux (x86-64 и arm64, glibc и статические musl для Alpine) в [GitHub Releases](https://github.com/maxeliseyev/ratatosk/releases):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/maxeliseyev/vless-proxy/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/maxeliseyev/ratatosk/main/install.sh | sh
 ```
 
-Скрипт определяет платформу, проверяет sha256 и ставит `vproxy` в `/usr/local/bin` (или `~/.local/bin`). Переменные: `VPROXY_VERSION=v0.12.0`, `VPROXY_PREFIX=~/.local/bin`.
+Скрипт определяет платформу, проверяет sha256 и ставит `ratatosk` в `/usr/local/bin` (или `~/.local/bin`). Переменные: `RATATOSK_VERSION=v0.18.6`, `RATATOSK_PREFIX=~/.local/bin`.
 
-Docker (образ `ghcr.io/maxeliseyev/vproxy`, linux/amd64 и linux/arm64, слушает `0.0.0.0:1080` внутри контейнера):
+Docker (образ `ghcr.io/maxeliseyev/ratatosk`, linux/amd64 и linux/arm64, слушает `0.0.0.0:1080` внутри контейнера):
 
 ```sh
-docker run -d --name vproxy -p 127.0.0.1:1080:1080 -v "$PWD/server.txt:/data/server.txt:ro" ghcr.io/maxeliseyev/vproxy
-docker run -d --name vproxy -p 127.0.0.1:1080:1080 ghcr.io/maxeliseyev/vproxy -s 'https://provider/sub/token'
-docker build -t vproxy .      # собрать самому (Alpine, статический musl)
+docker run -d --name ratatosk -p 127.0.0.1:1080:1080 -v "$PWD/server.txt:/data/server.txt:ro" ghcr.io/maxeliseyev/ratatosk
+docker run -d --name ratatosk -p 127.0.0.1:1080:1080 ghcr.io/maxeliseyev/ratatosk -s 'https://provider/sub/token'
+docker build -t ratatosk .      # собрать самому (Alpine, статический musl)
 ```
 
 Из исходников: `cargo build --release` (нужен Rust stable; rustls берётся из форка [maxeliseyev/rustls](https://github.com/maxeliseyev/rustls/tree/reality-0.23) автоматически и раз в неделю синхронизируется с upstream `rel-0.23`). Системный режим (`--tun`) встроен в бинарник — внешних зависимостей вроде sing-box больше не нужно.
@@ -33,61 +40,61 @@ docker build -t vproxy .      # собрать самому (Alpine, стати�
 ## Быстрый старт
 
 ```sh
-vproxy
+ratatosk
 ```
 
-При первом запуске vproxy попросит вставить `vless://` ссылку прямо в терминал (кавычки не нужны), проверит её и сохранит в `~/.config/vproxy/server.txt`. Дальше:
+При первом запуске ratatosk попросит вставить `vless://` ссылку прямо в терминал (кавычки не нужны), проверит её и сохранит в `~/.config/ratatosk/server.txt`. Дальше:
 
 ```sh
-vproxy                      # локальный SOCKS5 на 127.0.0.1:1080
-vproxy --tui                # то же с интерфейсом: сервер, соединения, трафик, логи, q для выхода
+ratatosk                      # локальный SOCKS5 на 127.0.0.1:1080
+ratatosk --tui                # то же с интерфейсом: сервер, соединения, трафик, логи, q для выхода
                             # несколько ссылок в server.txt → список серверов, ↑↓ и Enter переключают на лету,
                             # a добавляет сервер (вставьте ссылку), d удаляет,
                             # p замеряет задержку всех серверов, b переключает на самый быстрый,
                             # u обновляет список из подписки
-sudo vproxy --tun           # весь системный трафик через сервер (встроенный TUN, macOS/Linux)
-sudo vproxy --tui --tun     # системный режим с интерфейсом
-sudo vproxy --tun --split-ru  # .ru .su .рф — напрямую, мимо прокси (сплит-туннелинг)
+sudo ratatosk --tun           # весь системный трафик через сервер (встроенный TUN, macOS/Linux)
+sudo ratatosk --tui --tun     # системный режим с интерфейсом
+sudo ratatosk --tun --split-ru  # .ru .su .рф — напрямую, мимо прокси (сплит-туннелинг)
 ```
 
 Проверка: `curl --socks5-hostname 127.0.0.1:1080 https://api.ipify.org` (локальный режим) или просто `curl https://api.ipify.org` (TUN).
 
 ### В фоне
 
-Чтобы vproxy работал после закрытия терминала и поднимался при входе или загрузке, он ставится как сервис (launchd на macOS, systemd на Linux):
+Чтобы ratatosk работал после закрытия терминала и поднимался при входе или загрузке, он ставится как сервис (launchd на macOS, systemd на Linux):
 
 ```sh
-vproxy service install -f server.txt            # локальный прокси, агент пользователя
-sudo vproxy service install --tun -f server.txt # системный VPN, демон с root
-vproxy service status | logs | uninstall        # с --tun для системного
+ratatosk service install -f server.txt            # локальный прокси, агент пользователя
+sudo ratatosk service install --tun -f server.txt # системный VPN, демон с root
+ratatosk service status | logs | uninstall        # с --tun для системного
 ```
 
-Пути к бинарнику и конфигу записываются в сервис абсолютными. Логи: `~/Library/Logs/vproxy.log` или `/var/log/vproxy.log` на macOS, `journalctl -u vproxy` на Linux.
+Пути к бинарнику и конфигу записываются в сервис абсолютными. Логи: `~/Library/Logs/ratatosk.log` или `/var/log/ratatosk.log` на macOS, `journalctl -u ratatosk` на Linux.
 
 Подписка провайдера (страница с base64-списком ссылок, как у 3x-ui, Marzban, Remnawave):
 
 ```sh
-vproxy -s 'https://provider/sub/token'   # список сохраняется в ~/.config/vproxy/server.txt (или в файл из -f)
-vproxy --refresh                         # обновить список из подписки и выйти
+ratatosk -s 'https://provider/sub/token'   # список сохраняется в ~/.config/ratatosk/server.txt (или в файл из -f)
+ratatosk --refresh                         # обновить список из подписки и выйти
 ```
 
-Дальше достаточно `vproxy` или `vproxy --tui`: список обновляется сам, когда он старше интервала провайдера (`profile-update-interval`, по умолчанию 24 ч), клавиша `u` в TUI обновляет вручную. В заголовке файла хранятся URL, название, время обновления и трафик (`subscription-userinfo`), выбранный сервер помечается `# active:`, а ссылки после строки `# manual` (добавленные через `a` или дописанные руками) при обновлении сохраняются. Ссылки других протоколов (vmess, trojan, ss) пропускаются.
+Дальше достаточно `ratatosk` или `ratatosk --tui`: список обновляется сам, когда он старше интервала провайдера (`profile-update-interval`, по умолчанию 24 ч), клавиша `u` в TUI обновляет вручную. В заголовке файла хранятся URL, название, время обновления и трафик (`subscription-userinfo`), выбранный сервер помечается `# active:`, а ссылки после строки `# manual` (добавленные через `a` или дописанные руками) при обновлении сохраняются. Ссылки других протоколов (vmess, trojan, ss) пропускаются.
 
 Другие способы указать сервер:
 
 ```sh
-vproxy -f server.txt                 # ссылка из файла (строки с # игнорируются)
-vproxy -u 'vless://...'              # ссылка аргументом, в кавычках
-vproxy -c config.toml                # полный TOML-конфиг
-vproxy --probe -f server.txt         # один handshake с сервером и отчёт
-vproxy --ping -f server.txt          # задержка handshake для всех серверов списка
-vproxy --split-ru                    # .ru .su .рф direct (= --direct-zone ru,su,рф)
-vproxy --direct-zone ru,su,рф,cn     # свой список зон, которые идут мимо прокси
+ratatosk -f server.txt                 # ссылка из файла (строки с # игнорируются)
+ratatosk -u 'vless://...'              # ссылка аргументом, в кавычках
+ratatosk -c config.toml                # полный TOML-конфиг
+ratatosk --probe -f server.txt         # один handshake с сервером и отчёт
+ratatosk --ping -f server.txt          # задержка handshake для всех серверов списка
+ratatosk --split-ru                    # .ru .su .рф direct (= --direct-zone ru,su,рф)
+ratatosk --direct-zone ru,su,рф,cn     # свой список зон, которые идут мимо прокси
 ```
 
 Поддерживаются ссылки с `security=reality|tls|none`, транспортом `type=tcp|ws|xhttp` (`path`, `host`, `mode`, `extra`), `flow=xtls-rprx-vision`, параметрами `pbk`, `sid`, `sni`, `fp` (`chrome` по умолчанию, `none` отключает имитацию), `spx`, `alpn`, и `#имя` сервера.
 
-Конфиг Xray/Happ в JSON тоже подходит напрямую: `vproxy -c happ.json`. Берутся vless-outbound (адрес, uuid, tcp/ws, tls/reality), порт socks-inbound и правила `routing.rules` (domain/ip/port → direct/proxy/block; `geosite`/`geoip` разбираются, но пока не применяются — для зон по доменам есть `direct_suffix`).
+Конфиг Xray/Happ в JSON тоже подходит напрямую: `ratatosk -c happ.json`. Берутся vless-outbound (адрес, uuid, tcp/ws, tls/reality), порт socks-inbound и правила `routing.rules` (domain/ip/port → direct/proxy/block; `geosite`/`geoip` разбираются, но пока не применяются — для зон по доменам есть `direct_suffix`).
 
 ## Конфиг
 
@@ -138,7 +145,7 @@ dns_via_proxy = true
 - **XTLS Vision нативно**: паддинг на время внутреннего TLS-handshake и прямая пересылка TCP (direct copy) для TLS 1.3 без двойного шифрования. Для этого REALITY-поток ведётся собственным драйвером поверх `rustls::ClientConnection` по одной TLS-записи за раз.
 - **TUN-режим** нативный, в одном процессе: собственный netstack + FakeDNS держат системный интерфейс и маршрутизацию, без sidecar и без внешних зависимостей (macOS/Linux; direct-соединения выходят через физический интерфейс).
 - **Routing** и **сплит-туннелинг**: direct / proxy / block по доменам (суффикс/ключевое слово, включая IDN/punycode), CIDR, приватным адресам и портам; `direct_suffix` / `--split-ru` пускают зону `.ru` `.su` `.рф` напрямую мимо прокси.
-- **TUI**: сервер и режим, соединения, трафик и скорость, лог с прокруткой (PgUp/PgDn, Home/End; свежие строки всегда видны) и его копия в `~/.config/vproxy/vproxy.log` с ротацией (5 MiB × 3, путь задаёт `--log-file`, `none` отключает); переключение между серверами из `server.txt` без перезапуска (новые соединения идут через выбранный, выбор запоминается), добавление сервера вставкой ссылки (`a`) и удаление (`d`) прямо из интерфейса; задержка handshake по каждому серверу (замер при старте и по `p`), `b` переключает на самый быстрый.
+- **TUI**: сервер и режим, соединения, трафик и скорость, лог с прокруткой (PgUp/PgDn, Home/End; свежие строки всегда видны) и его копия в `~/.config/ratatosk/ratatosk.log` с ротацией (5 MiB × 3, путь задаёт `--log-file`, `none` отключает); переключение между серверами из `server.txt` без перезапуска (новые соединения идут через выбранный, выбор запоминается), добавление сервера вставкой ссылки (`a`) и удаление (`d`) прямо из интерфейса; задержка handshake по каждому серверу (замер при старте и по `p`), `b` переключает на самый быстрый.
 - **MUX (Mux.Cool)**: несколько TCP-сессий в одном VLESS-соединении (`[mux]`, импортируется из Xray JSON); для серверов с Vision не применяется, как и в Xray.
 - **DNS**: remote/local, split-правила, кэш с TTL. Таймауты, лимит соединений, graceful shutdown.
 - **Проверено**: сквозные тесты против xray-core (локально) и боевого REALITY+Vision сервера: TLS 1.3 цели уходят в direct copy в обе стороны, загрузки совпадают по хэшу, upload и параллельные запросы работают.
@@ -152,7 +159,7 @@ dns_via_proxy = true
 - `server.txt` и `service.txt` содержат UUID и токен подписки, поэтому пишутся с правами `0600` в каталоге `0700`; в логах URL подписки показывается без пути. Ссылка в `-u` и URL в `-s` видны в `ps`, для постоянной работы лучше файл или `service install`.
 - Если inbound слушает не loopback (`-l 0.0.0.0`, Docker), это открытый прокси для всех, кто дотягивается до порта: `direct`-соединения к приватным и loopback адресам в этом режиме отклоняются (и после DNS-резолва), чтобы контейнер не стал мостом в сеть хоста. Публиковать порт стоит только как `-p 127.0.0.1:1080:1080` или внутри доверенной сети.
 - Отказ `accept()` при нехватке дескрипторов не роняет процесс, лимит открытых файлов поднимается при старте; UDP-ассоциация держит не более 128 целей.
-- `sudo vproxy --tun` и root-сервис поднимают TUN в самом процессе vproxy, без запуска сторонних бинарников. Опциональный sidecar xray-core (только для Vision поверх обычного TLS) запускается из обычных путей — vproxy предупредит, если бинарник доступен на запись не только root. Зависимости проверяются `cargo audit` в CI.
+- `sudo ratatosk --tun` и root-сервис поднимают TUN в самом процессе ratatosk, без запуска сторонних бинарников. Опциональный sidecar xray-core (только для Vision поверх обычного TLS) запускается из обычных путей — ratatosk предупредит, если бинарник доступен на запись не только root. Зависимости проверяются `cargo audit` в CI.
 
 ## Разработка
 

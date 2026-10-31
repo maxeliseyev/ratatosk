@@ -19,12 +19,12 @@ printf 'net.core.rmem_max=7500000\nnet.core.wmem_max=7500000\n' | sudo tee /etc/
 ```
 
 ```sh
-git clone https://github.com/maxeliseyev/vless-proxy.git && cd vless-proxy/deploy/trial-server
+git clone https://github.com/maxeliseyev/ratatosk.git && cd ratatosk/deploy/trial-server
 bash setup.sh example.ru          # .env, site/10m.bin, site/1g.bin, hy2-brutal.yaml, hy2-bbr.yaml
 docker compose up -d              # Caddy + iperf3
 docker compose logs -f caddy      # ждать "certificate obtained successfully"
 docker compose --profile hysteria up -d
-docker compose --profile h3 up -d          # наш h3-транспорт (vproxy-server) на 8445/udp
+docker compose --profile h3 up -d          # наш h3-транспорт (ratatosk-server) на 8445/udp
 ```
 
 Проверки с любой машины (нужен curl с HTTP/3, см. шапку `tspu-trial.sh`):
@@ -39,7 +39,7 @@ iperf3 -u -c example.ru -b 10M -t 10
 
 ## Детали
 
-- h3-транспорт: образ `ghcr.io/maxeliseyev/vproxy-server` из релиза, ничего собирать на VPS не нужно. `setup.sh` создаёт `h3-server.toml` (сертификат из хранилища Caddy, один uuid в `.h3-uuid`) и печатает ссылку `h3://…`, её принимают `vproxy` и Ratatosk. После продления сертификата: `docker compose --profile h3 restart`. Лог: `docker compose logs -f h3`.
+- h3-транспорт: образ `ghcr.io/maxeliseyev/ratatosk-server` из релиза, ничего собирать на VPS не нужно. `setup.sh` создаёт `h3-server.toml` (сертификат из хранилища Caddy, один uuid в `.h3-uuid`) и печатает ссылку `h3://…`, её принимают `ratatosk` и Ratatosk. После продления сертификата: `docker compose --profile h3 restart`. Лог: `docker compose logs -f h3`.
 
 - В исходниках сервер уже поддерживает обычные HTTP/3 GET/HEAD через
   `site_backend = "http://caddy:8080"`; `setup.sh` добавляет эту настройку

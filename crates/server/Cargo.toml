@@ -1,16 +1,16 @@
 [package]
-name = "vproxy-server"
+name = "ratatosk-server"
 version = "0.1.0"
 edition = "2021"
-description = "Server side of the vproxy h3 (QUIC) transport"
+description = "Server side of the ratatosk h3 (QUIC) transport"
 publish = false
 
 [[bin]]
-name = "vproxy-server"
+name = "ratatosk-server"
 path = "src/main.rs"
 
 [dependencies]
-vproxy-core = { path = "../core" }
+ratatosk-core = { path = "../core" }
 tokio = { version = "1", features = ["full"] }
 quinn = { version = "0.11.9", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
 rustls = "0.23"

@@ -4,7 +4,7 @@
 //! log file are easier to read than two interleaved ones.
 //!
 //! sing-box only adapts the system's traffic to our SOCKS inbound, so its
-//! per-connection errors always mirror something vproxy logs itself (a
+//! per-connection errors always mirror something ratatosk logs itself (a
 //! refused SOCKS request, or our own dial to the server). Those go to
 //! DEBUG; what stays visible is start/stop and system-level trouble (TUN
 //! interface, routes, DNS, permissions), and the last lines are kept so a
@@ -129,8 +129,8 @@ fn strip_request_id(message: &str) -> &str {
     }
 }
 
-/// sing-box's per-connection failures duplicate vproxy's own log: a SOCKS
-/// request vproxy rejected (it logged why), or a direct dial that is our own
+/// sing-box's per-connection failures duplicate ratatosk's own log: a SOCKS
+/// request ratatosk rejected (it logged why), or a direct dial that is our own
 /// connection to the server. Keep them for `-v` only.
 fn demote(name: &str, level: Level, message: &str) -> Level {
     if name == "sing-box" && level <= Level::WARN && message.starts_with("connection:") {

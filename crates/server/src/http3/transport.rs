@@ -4,6 +4,7 @@
 use anyhow::{anyhow, Result};
 use bytes::{Bytes, BytesMut};
 use h3::quic::{self, ConnectionErrorIncoming, StreamErrorIncoming};
+use ratatosk_core::h3::wire::{self, AUTH_LABEL, TOKEN_LEN};
 use std::collections::VecDeque;
 use std::future::{poll_fn, Future};
 use std::pin::Pin;
@@ -11,7 +12,6 @@ use std::sync::Arc;
 use std::task::{ready, Context as TaskContext, Poll};
 use tokio::time::timeout;
 use uuid::Uuid;
-use vproxy_core::h3::wire::{self, AUTH_LABEL, TOKEN_LEN};
 
 const MAX_PROBES: usize = 16;
 

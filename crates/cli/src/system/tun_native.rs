@@ -1,15 +1,15 @@
-//! Native TUN mode: vproxy owns the TUN interface and runs the in-process
-//! netstack (`vproxy_core::netstack`) directly — no sing-box.
+//! Native TUN mode: ratatosk owns the TUN interface and runs the in-process
+//! netstack (`ratatosk_core::netstack`) directly — no sing-box.
 //!
 //! The netstack turns tunnelled packets into routed connections through
 //! `ProxyClient`. This module does the OS plumbing sing-box used to do: create
-//! the TUN, point the default route and DNS at it, keep vproxy's own sockets
+//! the TUN, point the default route and DNS at it, keep ratatosk's own sockets
 //! off the tunnel, and restore all of it on exit.
 //!
 //! Loop avoidance: the one connection to the server is kept off the tunnel by a
 //! host route via the original gateway; `direct`-routed flows egress the
 //! physical interface because `ProxyClient` is given its name (`IP_BOUND_IF` on
-//! macOS, `SO_BINDTODEVICE` on Linux — see `vproxy_core::proxy::egress`);
+//! macOS, `SO_BINDTODEVICE` on Linux — see `ratatosk_core::proxy::egress`);
 //! LAN/private ranges are routed around the tunnel outright.
 //!
 //! The netstack, the TUN device creation and the connector are shared; each OS
@@ -17,9 +17,9 @@
 //! (`route`/`networksetup` on macOS, `ip`/`resolv.conf` on Linux).
 
 use anyhow::Result;
+use ratatosk_core::Config;
 use std::sync::Arc;
 use tokio::sync::watch;
-use vproxy_core::Config;
 
 /// Entry point used by the process lifecycle (`crate::runtime`).
 pub async fn run(config: Arc<Config>, shutdown: watch::Receiver<bool>) -> Result<()> {
@@ -45,19 +45,19 @@ use shared::*;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod shared {
     use anyhow::{Context, Result};
+    use ratatosk_core::netstack::device::channel_device;
+    use ratatosk_core::netstack::fakedns::{FakeDns, DEFAULT_POOL};
+    use ratatosk_core::netstack::flows::{FlowLog, DEFAULT_CAPACITY};
+    use ratatosk_core::netstack::Netstack;
+    use ratatosk_core::proxy::direct_dns::DirectResolver;
+    use ratatosk_core::proxy::dns_cache::{DnsCache, DnsCacheConfig};
+    use ratatosk_core::proxy::egress::Egress;
+    use ratatosk_core::proxy::runtime::ProxyClient;
+    use ratatosk_core::{ActiveServer, Config};
     use std::net::Ipv4Addr;
     use std::sync::Arc;
     use tokio::sync::watch;
     use tracing::{info, warn};
-    use vproxy_core::netstack::device::channel_device;
-    use vproxy_core::netstack::fakedns::{FakeDns, DEFAULT_POOL};
-    use vproxy_core::netstack::flows::{FlowLog, DEFAULT_CAPACITY};
-    use vproxy_core::netstack::Netstack;
-    use vproxy_core::proxy::direct_dns::DirectResolver;
-    use vproxy_core::proxy::dns_cache::{DnsCache, DnsCacheConfig};
-    use vproxy_core::proxy::egress::Egress;
-    use vproxy_core::proxy::runtime::ProxyClient;
-    use vproxy_core::{ActiveServer, Config};
 
     pub const FAKE_DNS_CAPACITY: u32 = 16_384;
     /// Routed around the tunnel via the original gateway (LAN, link-local,
@@ -248,17 +248,17 @@ mod shared {
 mod macos {
     use super::*;
     use anyhow::{bail, Context, Result};
+    use ratatosk_core::Config;
     use std::net::Ipv4Addr;
     use std::process::Command;
     use std::sync::Arc;
     use tokio::sync::watch;
     use tracing::{info, warn};
-    use vproxy_core::Config;
 
     pub async fn run(config: Arc<Config>, shutdown: watch::Receiver<bool>) -> Result<()> {
         if !is_root() {
             bail!(
-                "TUN mode creates a network interface and must run as root (sudo vproxy --tun ...)"
+                "TUN mode creates a network interface and must run as root (sudo ratatosk --tun ...)"
             );
         }
         let (gateway, phys_iface) = default_route().context("find the default route")?;
@@ -495,12 +495,12 @@ mod macos {
 mod linux {
     use super::*;
     use anyhow::{bail, Context, Result};
+    use ratatosk_core::Config;
     use std::net::Ipv4Addr;
     use std::process::Command;
     use std::sync::Arc;
     use tokio::sync::watch;
     use tracing::{info, warn};
-    use vproxy_core::Config;
 
     /// Where the system resolver reads from. Replaced while the tunnel is up,
     /// restored on teardown.
@@ -509,7 +509,7 @@ mod linux {
     pub async fn run(config: Arc<Config>, shutdown: watch::Receiver<bool>) -> Result<()> {
         if !is_root() {
             bail!(
-                "TUN mode creates a network interface and must run as root (sudo vproxy --tun ...)"
+                "TUN mode creates a network interface and must run as root (sudo ratatosk --tun ...)"
             );
         }
         let (gateway, phys_iface) = default_route().context("find the default route")?;

@@ -36,7 +36,7 @@ gen() {
 gen brutal 8443 false
 gen bbr 8444 true
 
-# h3-транспорт (vproxy-server): один uuid на стенд, сертификат из хранилища Caddy.
+# h3-транспорт (ratatosk-server): один uuid на стенд, сертификат из хранилища Caddy.
 if [ ! -f .h3-uuid ]; then
     cat /proc/sys/kernel/random/uuid >.h3-uuid
     chmod 600 .h3-uuid

@@ -1,4 +1,4 @@
-//! Show the TLS fingerprint a server sees from vproxy's TLS client.
+//! Show the TLS fingerprint a server sees from ratatosk's TLS client.
 //!
 //!     cargo run --example fingerprint                 # Chrome-shaped (default)
 //!     cargo run --example fingerprint -- chrome133     # previous Chrome shape
@@ -9,9 +9,9 @@
 //! client. With another host it only performs the handshake and a GET /,
 //! which checks that the shaped hello is accepted by that server.
 
+use ratatosk_core::protocol::fingerprint::Fingerprint;
+use ratatosk_core::transport::tls::TlsClient;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use vproxy_core::protocol::fingerprint::Fingerprint;
-use vproxy_core::transport::tls::TlsClient;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

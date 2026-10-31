@@ -297,7 +297,7 @@ pub enum Transport {
     Tcp,
     Ws,
     Xhttp,
-    /// QUIC to our own `vproxy-server` (`h3://` links), see [`crate::h3`].
+    /// QUIC to our own `ratatosk-server` (`h3://` links), see [`crate::h3`].
     H3,
 }
 

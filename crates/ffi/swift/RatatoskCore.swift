@@ -1,4 +1,4 @@
-// Swift side of the vproxy core for the Ratatosk Packet Tunnel extension.
+// Swift side of the ratatosk core for the Ratatosk Packet Tunnel extension.
 // Add RatatoskCore.xcframework (scripts/build-xcframework.sh) and this file
 // to the extension target.
 

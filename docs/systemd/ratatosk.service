@@ -1,0 +1,33 @@
+# System-wide ratatosk on Linux. With tun.enabled = true the unit needs root
+# (CAP_NET_ADMIN) because sing-box creates the TUN interface.
+#
+# Preferred: `ratatosk service install [--tun] -f server.txt` writes and enables a unit for you.
+# Manual way:
+# install:
+#   sudo cp target/release/ratatosk /usr/local/bin/ratatosk
+#   sudo mkdir -p /etc/ratatosk && sudo cp config.toml /etc/ratatosk/config.toml
+#   sudo cp docs/systemd/ratatosk.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now ratatosk
+# logs:
+#   journalctl -u ratatosk -f
+
+[Unit]
+Description=ratatosk VLESS client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/ratatosk --config /etc/ratatosk/config.toml
+Restart=on-failure
+RestartSec=3
+# Drop these two lines to run as root for TUN mode; for a plain local proxy
+# an unprivileged user is enough.
+DynamicUser=yes
+AmbientCapabilities=
+# TUN mode as root instead:
+#   User=root
+#   AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

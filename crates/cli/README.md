@@ -1,13 +1,13 @@
-# vproxy — CLI-клиент
+# ratatosk — CLI-клиент
 
-Бинарник `vproxy`, терминальный интерфейс, журнал, службы и системный
+Бинарник `ratatosk`, терминальный интерфейс, журнал, службы и системный
 TUN-режим (`--tun`, нативный in-process netstack на macOS; xray-core
 используется как sidecar только для XTLS Vision поверх plain TLS).
-Использует независимый `vproxy-core`.
+Использует независимый `ratatosk-core`.
 
 ```sh
-cargo run -p vproxy -- --help
-cargo build -p vproxy --release
+cargo run -p ratatosk -- --help
+cargo build -p ratatosk --release
 ```
 
 См. [использование клиента](../../README.md) и

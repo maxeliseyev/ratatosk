@@ -30,6 +30,10 @@ use uuid::Uuid;
 pub const ALPN: &[u8] = b"h3";
 
 /// TLS exporter label the auth token is derived from (RFC 5705 / 8446 7.5).
+///
+/// Frozen as `vproxy h3 auth` for wire compatibility with vproxy-era servers
+/// and clients; renaming it would break authentication against deployments
+/// that have not been upgraded in lockstep.
 pub const AUTH_LABEL: &[u8] = b"vproxy h3 auth";
 
 /// Bytes the client writes on its first stream, and nothing else.

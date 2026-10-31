@@ -1,10 +1,10 @@
 //! Real DNS resolution for `direct` dials in TUN mode.
 //!
-//! In TUN mode vproxy points the system resolver at the netstack's FakeDNS, so
+//! In TUN mode ratatosk points the system resolver at the netstack's FakeDNS, so
 //! the OS `lookup_host` only ever returns fake pool addresses (`198.18.x.x`).
 //! That is what the tunnelled apps want — they connect to the fake IP, the
 //! netstack maps it back to the name and routes it. But a `direct` connection
-//! that vproxy opens itself needs the target's *real* IP: connecting to a fake
+//! that ratatosk opens itself needs the target's *real* IP: connecting to a fake
 //! address egresses nowhere (`ENETUNREACH`).
 //!
 //! So for `direct` domains we resolve ourselves, querying an upstream DNS

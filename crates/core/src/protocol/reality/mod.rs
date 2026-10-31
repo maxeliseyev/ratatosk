@@ -171,7 +171,7 @@ impl RealityHandshake {
 
     /// REALITY certificate check. `Ok(true)` means the server is ours.
     /// `Ok(false)` means a well-formed but foreign certificate: the caller
-    /// aborts the handshake (vproxy never falls back to PKI or sends VLESS
+    /// aborts the handshake (ratatosk never falls back to PKI or sends VLESS
     /// to such a peer; Xray would spider the site instead).
     pub fn verify_server_certificate(&self, cert_der: &[u8]) -> Result<bool> {
         let auth_key = self

@@ -1,6 +1,6 @@
 //! Bind outbound sockets to a specific network interface.
 //!
-//! In TUN mode on desktop the tunnel is the default route, so a socket vproxy
+//! In TUN mode on desktop the tunnel is the default route, so a socket ratatosk
 //! opens for a `direct` connection would be routed back into the tunnel and
 //! loop. Binding that socket to the physical interface makes it egress there
 //! regardless of the route table (macOS `IP_BOUND_IF` / `IPV6_BOUND_IF`,

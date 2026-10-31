@@ -137,7 +137,7 @@ impl ActiveServer {
         probe.validate()?;
         if probe.needs_xray_sidecar()? {
             anyhow::bail!(
-                "{} needs the xray-core sidecar; restart vproxy with it as the first server",
+                "{} needs the xray-core sidecar; restart ratatosk with it as the first server",
                 probe.server.endpoint()
             );
         }
@@ -1434,7 +1434,7 @@ pub(crate) fn reality_client(server: &ServerConfig) -> Result<RealityClient> {
 }
 
 /// Connect to the configured server once, complete the transport handshake
-/// and describe the result. Used by `vproxy --probe`.
+/// and describe the result. Used by `ratatosk --probe`.
 pub async fn probe_transport(config: &Config) -> Result<String> {
     let server = &config.server;
     if server.transport_kind()? == Transport::H3 {

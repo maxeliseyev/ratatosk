@@ -1,9 +1,9 @@
 # Release image of the h3 server: wraps the prebuilt static musl binaries
-# from the release workflow (dist/<arch>/vproxy-server).
+# from the release workflow (dist/<arch>/ratatosk-server).
 FROM alpine:3.21
 ARG TARGETARCH
-RUN apk add --no-cache ca-certificates && mkdir -p /etc/vproxy-server
-COPY dist/${TARGETARCH}/vproxy-server /usr/local/bin/vproxy-server
+RUN apk add --no-cache ca-certificates && mkdir -p /etc/ratatosk-server
+COPY dist/${TARGETARCH}/ratatosk-server /usr/local/bin/ratatosk-server
 EXPOSE 443/udp
-ENTRYPOINT ["vproxy-server"]
-CMD ["-c", "/etc/vproxy-server/server.toml"]
+ENTRYPOINT ["ratatosk-server"]
+CMD ["-c", "/etc/ratatosk-server/server.toml"]

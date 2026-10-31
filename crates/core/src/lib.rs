@@ -2,7 +2,7 @@
 //! local proxy listeners and the userspace network stack.
 //!
 //! CLI, terminal UI, host services and external processes live in the
-//! `vproxy` package; the server and C ABI are separate workspace members.
+//! `ratatosk` package; the server and C ABI are separate workspace members.
 
 pub mod config;
 pub mod h3;

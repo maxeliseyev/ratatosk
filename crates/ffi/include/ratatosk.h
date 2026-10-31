@@ -1,4 +1,4 @@
-// C interface of the vproxy core for the Ratatosk iOS Packet Tunnel.
+// C interface of the ratatosk core for the Ratatosk iOS Packet Tunnel.
 // Implemented in ffi/src/lib.rs; keep the two in step.
 
 #ifndef RATATOSK_H

@@ -4,7 +4,7 @@
 //! * A [`SupportedKxGroup`] for X25519 that keeps the ephemeral secret so the
 //!   REALITY auth key can be derived from it (rustls never exposes the key
 //!   share secret itself).
-//! * A [`ClientHelloSessionIdHook`] (vproxy patch to rustls) that replaces the
+//! * A [`ClientHelloSessionIdHook`] (ratatosk patch to rustls) that replaces the
 //!   session id of the initial ClientHello with the sealed authenticator.
 //! * A [`ServerCertVerifier`] that accepts only a certificate bound to the
 //!   derived auth key.

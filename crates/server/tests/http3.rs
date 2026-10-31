@@ -2,6 +2,7 @@
 
 use bytes::{Buf, Bytes};
 use http::{header, Method, Request, Response, StatusCode};
+use ratatosk_server::Server;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -9,7 +10,6 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use uuid::Uuid;
-use vproxy_server::Server;
 
 const NAME: &str = "site.test";
 const LIMIT: Duration = Duration::from_secs(3);

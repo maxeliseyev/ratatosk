@@ -6,6 +6,10 @@ use anyhow::Result;
 use crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind, KeyModifiers,
 };
+use ratatosk_core::config::servers::ServerList;
+use ratatosk_core::config::Config;
+use ratatosk_core::proxy::runtime::ActiveServer;
+use ratatosk_core::proxy::stats::{human_bytes, Snapshot, STATS};
 use ratatui::layout::{Constraint, Direction, Layout, Position};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -19,10 +23,6 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing_subscriber::fmt::MakeWriter;
-use vproxy_core::config::servers::ServerList;
-use vproxy_core::config::Config;
-use vproxy_core::proxy::runtime::ActiveServer;
-use vproxy_core::proxy::stats::{human_bytes, Snapshot, STATS};
 
 /// Ring buffer of formatted log lines, fed by a tracing writer; every
 /// write is also appended to the rotating file when one is attached.
@@ -174,8 +174,9 @@ struct App {
     ping_round: u64,
     pings_in_flight: usize,
     sub_rx:
-        mpsc::UnboundedReceiver<Result<vproxy_core::config::subscription::Subscription, String>>,
-    sub_tx: mpsc::UnboundedSender<Result<vproxy_core::config::subscription::Subscription, String>>,
+        mpsc::UnboundedReceiver<Result<ratatosk_core::config::subscription::Subscription, String>>,
+    sub_tx:
+        mpsc::UnboundedSender<Result<ratatosk_core::config::subscription::Subscription, String>>,
     refreshing: bool,
 }
 
@@ -194,7 +195,7 @@ impl App {
         let url = meta.url.clone();
         let tx = self.sub_tx.clone();
         tokio::spawn(async move {
-            let result = vproxy_core::config::subscription::fetch(&url)
+            let result = ratatosk_core::config::subscription::fetch(&url)
                 .await
                 .map_err(|e| format!("{e:#}"));
             let _ = tx.send(result);
@@ -260,7 +261,7 @@ impl App {
             let server = entry.server.clone();
             let tx = self.ping_tx.clone();
             tokio::spawn(async move {
-                let result = vproxy_core::proxy::runtime::measure_handshake(&server, limit)
+                let result = ratatosk_core::proxy::runtime::measure_handshake(&server, limit)
                     .await
                     .map_err(|e| e.to_string());
                 let _ = tx.send((i, round, result));
@@ -582,7 +583,7 @@ impl App {
             Paragraph::new(header).block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(format!(" vproxy {} ", env!("CARGO_PKG_VERSION"))),
+                    .title(format!(" ratatosk {} ", env!("CARGO_PKG_VERSION"))),
             ),
             chunks[0],
         );
@@ -773,7 +774,7 @@ fn log_style(l: &str) -> Style {
     }
 }
 
-/// `/Users/me/.config/vproxy/vproxy.log` → `~/.config/vproxy/vproxy.log`.
+/// `/Users/me/.config/ratatosk/ratatosk.log` → `~/.config/ratatosk/ratatosk.log`.
 fn shorten_home(path: &Path) -> String {
     let shown = path.display().to_string();
     match std::env::var("HOME") {

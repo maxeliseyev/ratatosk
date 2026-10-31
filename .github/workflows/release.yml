@@ -51,31 +51,31 @@ jobs:
         if: matrix.musl
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - name: Build
-        run: cargo build -p vproxy --release --locked --target ${{ matrix.target }}
+        run: cargo build -p ratatosk --release --locked --target ${{ matrix.target }}
       - name: Smoke test
         if: matrix.target != 'x86_64-apple-darwin'
-        run: target/${{ matrix.target }}/release/vproxy --version
+        run: target/${{ matrix.target }}/release/ratatosk --version
       # The h3 server runs on Linux VPSes only.
-      - name: Build vproxy-server
+      - name: Build ratatosk-server
         if: startsWith(matrix.name, 'linux')
         run: |
-          cargo build --release --locked --target ${{ matrix.target }} -p vproxy-server
-          target/${{ matrix.target }}/release/vproxy-server --help
+          cargo build --release --locked --target ${{ matrix.target }} -p ratatosk-server
+          target/${{ matrix.target }}/release/ratatosk-server --help
       - name: Package
         run: |
           set -eu
-          pkg="vproxy-${{ matrix.name }}"
+          pkg="ratatosk-${{ matrix.name }}"
           mkdir -p "dist/$pkg"
-          cp "target/${{ matrix.target }}/release/vproxy" "dist/$pkg/"
+          cp "target/${{ matrix.target }}/release/ratatosk" "dist/$pkg/"
           cp README.md ROADMAP.md config.toml install.sh "dist/$pkg/"
           cp -r docs "dist/$pkg/docs"
           tar -C dist -czf "dist/$pkg.tar.gz" "$pkg"
           (cd dist && shasum -a 256 "$pkg.tar.gz" > "$pkg.tar.gz.sha256")
           cat "dist/$pkg.tar.gz.sha256"
-          if [ -f "target/${{ matrix.target }}/release/vproxy-server" ]; then
-            spkg="vproxy-server-${{ matrix.name }}"
+          if [ -f "target/${{ matrix.target }}/release/ratatosk-server" ]; then
+            spkg="ratatosk-server-${{ matrix.name }}"
             mkdir -p "dist/$spkg"
-            cp "target/${{ matrix.target }}/release/vproxy-server" "dist/$spkg/"
+            cp "target/${{ matrix.target }}/release/ratatosk-server" "dist/$spkg/"
             cp crates/server/README.md "dist/$spkg/"
             tar -C dist -czf "dist/$spkg.tar.gz" "$spkg"
             (cd dist && shasum -a 256 "$spkg.tar.gz" > "$spkg.tar.gz.sha256")
@@ -126,10 +126,10 @@ jobs:
         run: |
           set -eu
           mkdir -p dist/amd64 dist/arm64
-          tar -xzf artifacts/vproxy-linux-x86_64-musl.tar.gz -C dist/amd64 --strip-components=1 vproxy-linux-x86_64-musl/vproxy
-          tar -xzf artifacts/vproxy-linux-arm64-musl.tar.gz -C dist/arm64 --strip-components=1 vproxy-linux-arm64-musl/vproxy
-          tar -xzf artifacts/vproxy-server-linux-x86_64-musl.tar.gz -C dist/amd64 --strip-components=1 vproxy-server-linux-x86_64-musl/vproxy-server
-          tar -xzf artifacts/vproxy-server-linux-arm64-musl.tar.gz -C dist/arm64 --strip-components=1 vproxy-server-linux-arm64-musl/vproxy-server
+          tar -xzf artifacts/ratatosk-linux-x86_64-musl.tar.gz -C dist/amd64 --strip-components=1 ratatosk-linux-x86_64-musl/ratatosk
+          tar -xzf artifacts/ratatosk-linux-arm64-musl.tar.gz -C dist/arm64 --strip-components=1 ratatosk-linux-arm64-musl/ratatosk
+          tar -xzf artifacts/ratatosk-server-linux-x86_64-musl.tar.gz -C dist/amd64 --strip-components=1 ratatosk-server-linux-x86_64-musl/ratatosk-server
+          tar -xzf artifacts/ratatosk-server-linux-arm64-musl.tar.gz -C dist/arm64 --strip-components=1 ratatosk-server-linux-arm64-musl/ratatosk-server
           ls -la dist/*
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -142,8 +142,8 @@ jobs:
         id: tags
         run: |
           version="${GITHUB_REF_NAME#v}"
-          echo "tags=ghcr.io/${{ github.repository_owner }}/vproxy:${version},ghcr.io/${{ github.repository_owner }}/vproxy:latest" >> "$GITHUB_OUTPUT"
-          echo "server=ghcr.io/${{ github.repository_owner }}/vproxy-server:${version},ghcr.io/${{ github.repository_owner }}/vproxy-server:latest" >> "$GITHUB_OUTPUT"
+          echo "tags=ghcr.io/${{ github.repository_owner }}/ratatosk:${version},ghcr.io/${{ github.repository_owner }}/ratatosk:latest" >> "$GITHUB_OUTPUT"
+          echo "server=ghcr.io/${{ github.repository_owner }}/ratatosk-server:${version},ghcr.io/${{ github.repository_owner }}/ratatosk-server:latest" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
         with:
           context: .

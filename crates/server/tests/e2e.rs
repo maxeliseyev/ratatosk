@@ -1,7 +1,11 @@
-//! The h3 transport end to end on loopback: `vproxy_core::h3::H3Client` against
-//! `vproxy_server::Server` with a self-signed certificate, relaying to
+//! The h3 transport end to end on loopback: `ratatosk_core::h3::H3Client` against
+//! `ratatosk_server::Server` with a self-signed certificate, relaying to
 //! local TCP and UDP echo servers.
 
+use ratatosk_core::h3::H3Client;
+use ratatosk_core::protocol::vless::Address;
+use ratatosk_core::{ActiveServer, Config, ProxyClient, VlessUrl};
+use ratatosk_server::{Accounts, Server};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -10,10 +14,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::time::timeout;
 use uuid::Uuid;
-use vproxy_core::h3::H3Client;
-use vproxy_core::protocol::vless::Address;
-use vproxy_core::{ActiveServer, Config, ProxyClient, VlessUrl};
-use vproxy_server::{Accounts, Server};
 
 const NAME: &str = "h3.test";
 const ALICE: Uuid = Uuid::from_u128(0xa11ce);
@@ -31,7 +31,7 @@ async fn stand(allow_private: bool) -> Stand {
     let generated = rcgen::generate_simple_self_signed(vec![NAME.to_string()]).unwrap();
     let cert = CertificateDer::from(generated.cert.der().to_vec());
     let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(generated.key_pair.serialize_der()));
-    let admin = std::env::temp_dir().join(format!("vproxy-e2e-{}.sock", Uuid::new_v4()));
+    let admin = std::env::temp_dir().join(format!("ratatosk-e2e-{}.sock", Uuid::new_v4()));
     let server = Server::bind(
         "127.0.0.1:0".parse().unwrap(),
         vec![cert.clone()],
@@ -84,7 +84,7 @@ fn client(stand: &Stand, uuid: Uuid) -> H3Client {
         NAME,
         uuid,
         roots,
-        vproxy_core::protocol::fingerprint::Fingerprint::Chrome,
+        ratatosk_core::protocol::fingerprint::Fingerprint::Chrome,
     )
     .unwrap()
 }
@@ -206,7 +206,7 @@ async fn proxy_client_routes_h3_links_over_quic() {
     }
 
     let (address, port) = udp_echo_target(&stand);
-    let vproxy_core::proxy::runtime::UdpOutbound::H3(session) =
+    let ratatosk_core::proxy::runtime::UdpOutbound::H3(session) =
         proxy.open_udp(address, port).await.unwrap()
     else {
         panic!("h3 server, not an h3 UDP session");
@@ -517,7 +517,7 @@ async fn quic_clienthello_on_the_wire_is_chrome() {
 
     let stand = stand(true).await;
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let chrome = vproxy_core::protocol::fingerprint::Fingerprint::Chrome
+    let chrome = ratatosk_core::protocol::fingerprint::Fingerprint::Chrome
         .rewriter()
         .expect("Chrome yields a rewriter");
 
@@ -555,7 +555,7 @@ async fn quic_clienthello_on_the_wire_is_chrome() {
         !captured.is_empty(),
         "quinn never called the fork's client_hello_rewriter on the QUIC path"
     );
-    let ja4 = vproxy_core::protocol::fingerprint::ja4_quic(&captured[0])
+    let ja4 = ratatosk_core::protocol::fingerprint::ja4_quic(&captured[0])
         .expect("the wire ClientHello parses");
     assert_eq!(
         ja4, "q13d0311h3_55b375c5d22e_653d80c3fe9d",
@@ -578,7 +578,7 @@ async fn stats_report_a_connection_and_its_stream() {
     // The admin socket comes up alongside the server; retry briefly.
     let mut snap = None;
     for _ in 0..30 {
-        if let Ok(s) = vproxy_server::fetch_stats(&stand.admin).await {
+        if let Ok(s) = ratatosk_server::fetch_stats(&stand.admin).await {
             snap = Some(s);
             break;
         }

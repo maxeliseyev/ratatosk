@@ -1,6 +1,6 @@
-//! Import an Xray-core / Happ JSON client config as a vproxy [`Config`].
+//! Import an Xray-core / Happ JSON client config as a ratatosk [`Config`].
 //!
-//! Only what vproxy can act on is taken: the first `vless` outbound (its
+//! Only what ratatosk can act on is taken: the first `vless` outbound (its
 //! address, user, transport and security), the first `socks` inbound port and
 //! the `routing.rules` that map to our rule model. DNS, policy, stats and
 //! metrics sections are ignored.

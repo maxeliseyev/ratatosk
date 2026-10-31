@@ -126,8 +126,8 @@ TCP congestion control не трогаем: на стенде должен ос�
 ## 6. Стенд
 
 ```sh
-git clone https://github.com/maxeliseyev/vless-proxy.git
-cd vless-proxy/deploy/trial-server
+git clone https://github.com/maxeliseyev/ratatosk.git
+cd ratatosk/deploy/trial-server
 bash setup.sh trial.example.com          # .env, 10 МБ и 1 ГБ, конфиги Hysteria
 docker compose up -d                     # Caddy + iperf3
 docker compose logs -f caddy             # ждать "certificate obtained successfully"
@@ -165,7 +165,7 @@ iperf3 -u -c trial.example.com -p 5201 -b 10M -t 10               # UDP, гип�
 
 ### Выключите TUN и VPN
 
-Это критично. Пока работает `vproxy --tui --tun` (или Happ, или любой системный VPN), вы измеряете не ТСПУ, а свой туннель. Признак: `curl https://ipinfo.io/ip` показывает не российский IP, а скрипт печатает «внешний IP не в России».
+Это критично. Пока работает `ratatosk --tui --tun` (или Happ, или любой системный VPN), вы измеряете не ТСПУ, а свой туннель. Признак: `curl https://ipinfo.io/ip` показывает не российский IP, а скрипт печатает «внешний IP не в России».
 
 Отдельная ловушка: **при включённом TUN ping и `nc` врут**. Sing-box отвечает на ICMP сам, поэтому `ping 192.0.2.1` (TEST-NET, которого не существует) даёт «0% loss», а `nc -z` показывает «порт открыт», хотя пакеты никуда не идут. Для проверки в обход TUN используйте `curl --interface en0` или `ssh -o BindInterface=en0`.
 
@@ -173,7 +173,7 @@ iperf3 -u -c trial.example.com -p 5201 -b 10M -t 10               # UDP, гип�
 
 - `curl` с HTTP/3 (скрипт сам найдёт Homebrew-сборку);
 - `iperf3` (`brew install iperf3` / `apt install iperf3`);
-- `vproxy` — только для H0, путь передаётся через `-b` (для локальной сборки: `-b ./target/debug/vproxy`);
+- `ratatosk` — только для H0, путь передаётся через `-b` (для локальной сборки: `-b ./target/debug/ratatosk`);
 - файл ссылок для H0: две строки на **один и тот же зарубежный REALITY-сервер**, отличаются только `fp`:
 
 ```
@@ -229,7 +229,7 @@ bash scripts/tspu-trial.sh -n "..." -i trial2.example.com:5201 \
 Через неделю после начала испытаний:
 
 ```sh
-cd vless-proxy/deploy/trial-server
+cd ratatosk/deploy/trial-server
 docker compose exec caddy cat /data/access.log \
   | jq -r '[.ts, .request.remote_ip, .request.uri, (.request.headers."User-Agent"[0] // "-")] | @tsv' \
   | sort | uniq -c | sort -rn | head -50
@@ -261,13 +261,13 @@ docker compose exec caddy cat /data/access.log \
 | В отчёте внешний IP не РФ | включён TUN/VPN; выключите и перезапустите |
 | `10m.bin`/`1g.bin` отдают 404 | не запускали `setup.sh` или том `./site` не смонтирован |
 | `curl` без HTTP/3 | `brew install curl`, проверить `curl --version \| grep HTTP3`; скрипт ищет Homebrew-путь сам |
-| H0 падает на обеих ссылках | vproxy не в PATH/неверный `-b`, ссылки от разных серверов, порт 18081+ занят |
+| H0 падает на обеих ссылках | ratatosk не в PATH/неверный `-b`, ссылки от разных серверов, порт 18081+ занят |
 | H0 «работает», но это ничего не значит | REALITY-сервер в РФ; для H0 нужен зарубежный |
 
 ## 14. Убрать за собой
 
 ```sh
-cd vless-proxy/deploy/trial-server
+cd ratatosk/deploy/trial-server
 docker compose --profile hysteria down -v     # контейнеры, сеть и сертификаты
 ```
 

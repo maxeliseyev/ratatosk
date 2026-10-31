@@ -1,6 +1,6 @@
 //! Subscription URLs: a page whose body is a base64 (or plain) list of
 //! links, one per line, as served by 3x-ui, Marzban, Remnawave and friends.
-//! vproxy keeps the links in a links file whose header comments remember
+//! ratatosk keeps the links in a links file whose header comments remember
 //! the URL and the last update, so the list can be refreshed from the TUI,
 //! with `--refresh`, or automatically when it is older than the interval
 //! the provider sets (`profile-update-interval`, default 24 h).
@@ -228,7 +228,7 @@ pub fn format_date(unix: u64) -> String {
 /// Download and parse a subscription.
 pub async fn fetch(url: &str) -> Result<Subscription> {
     let client = reqwest::Client::builder()
-        .user_agent(format!("vproxy/{}", env!("CARGO_PKG_VERSION")))
+        .user_agent(format!("ratatosk/{}", env!("CARGO_PKG_VERSION")))
         .timeout(FETCH_TIMEOUT)
         .build()?;
     let resp = client

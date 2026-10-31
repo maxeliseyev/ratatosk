@@ -76,7 +76,7 @@ pub fn from_json(root: &Value, inbound_port: Option<u16>) -> Result<Config> {
                 anyhow::anyhow!("Amnezia config has no containers (protocols)")
             } else {
                 anyhow::anyhow!(
-                    "Amnezia config has no XRay container, only: {} (vproxy speaks VLESS only)",
+                    "Amnezia config has no XRay container, only: {} (ratatosk speaks VLESS only)",
                     names.join(", ")
                 )
             }

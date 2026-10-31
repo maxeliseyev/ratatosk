@@ -1,11 +1,11 @@
 use anyhow::{bail, Context, Result};
+use ratatosk_core::config::{Config, InboundProtocol, TransportSecurity};
 use serde_json::{json, Map, Value};
 use std::io::Write;
 use std::sync::Arc;
 use tempfile::Builder;
 use tokio::process::Command;
 use tracing::info;
-use vproxy_core::config::{Config, InboundProtocol, TransportSecurity};
 
 fn is_root() -> bool {
     // SAFETY: getuid has no preconditions.
@@ -37,7 +37,7 @@ fn warn_if_unsafe_for_root(binary: &std::path::Path, what: &str) {
 pub async fn run(config: Arc<Config>) -> Result<()> {
     let rendered = build_config_json(config.as_ref())?;
     let mut temp = Builder::new()
-        .prefix("vproxy-xray-")
+        .prefix("ratatosk-xray-")
         .suffix(".json")
         .tempfile()
         .context("Failed to create temporary xray config")?;
@@ -148,10 +148,10 @@ pub(crate) fn build_config_json(config: &Config) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uuid::Uuid;
-    use vproxy_core::config::{
+    use ratatosk_core::config::{
         DnsCacheConfig, DnsConfig, InboundConfig, RuntimeConfig, ServerConfig,
     };
+    use uuid::Uuid;
 
     fn base_reality_config() -> Config {
         Config {

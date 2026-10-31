@@ -1,12 +1,13 @@
-//! `vproxy-server --tui`: a live dashboard reading the admin socket's
+//! `ratatosk-server --tui`: a live dashboard reading the admin socket's
 //! newline-delimited JSON snapshots. Run it on the server, e.g.
-//! `docker compose exec vproxy-server vproxy-server --tui`.
+//! `docker compose exec ratatosk-server ratatosk-server --tui`.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use ratatosk_server::Snapshot;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Text};
@@ -14,7 +15,6 @@ use ratatui::widgets::{Block, Borders, Paragraph, Row, Table};
 use ratatui::Frame;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::UnixStream;
-use vproxy_server::Snapshot;
 
 use crate::{bytes, duration};
 
@@ -137,5 +137,5 @@ fn draw(f: &mut Frame, snap: Option<&Snapshot>, rate: (f64, f64)) {
 fn titled() -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
-        .title(" vproxy-server ")
+        .title(" ratatosk-server ")
 }

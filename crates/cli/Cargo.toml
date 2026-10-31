@@ -1,19 +1,19 @@
 [package]
-name = "vproxy"
+name = "ratatosk"
 version.workspace = true
 edition.workspace = true
-description = "Terminal client for vproxy"
+description = "Terminal client for ratatosk"
 publish = false
 
 [lib]
-name = "vproxy_cli"
+name = "ratatosk_cli"
 
 [[bin]]
-name = "vproxy"
+name = "ratatosk"
 path = "src/main.rs"
 
 [dependencies]
-vproxy-core = { path = "../core" }
+ratatosk-core = { path = "../core" }
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 tracing = "0.1"

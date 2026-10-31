@@ -1,4 +1,4 @@
-//! C ABI over the vproxy core for the Ratatosk iOS Packet Tunnel; the
+//! C ABI over the ratatosk core for the Ratatosk iOS Packet Tunnel; the
 //! header is `include/ratatosk.h`, the Swift wrapper `swift/RatatoskCore.swift`.
 //!
 //! One [`Tunnel`] owns a small tokio runtime running the netstack. The host
@@ -11,19 +11,19 @@
 //! handshakes and [`ratatosk_fetch_subscription`] downloads a subscription.
 //! Both block and return a JSON string to free with [`ratatosk_string_free`].
 
+use ratatosk_core::netstack::device::channel_device;
+use ratatosk_core::netstack::fakedns::{FakeDns, DEFAULT_POOL};
+use ratatosk_core::netstack::flows::{FlowLog, DEFAULT_CAPACITY};
+use ratatosk_core::netstack::Netstack;
+use ratatosk_core::proxy::direct_dns::DirectResolver;
+use ratatosk_core::proxy::dns_cache::DnsCache;
+use ratatosk_core::proxy::stats::{human_bytes, STATS};
+use ratatosk_core::{ActiveServer, ProxyClient};
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
-use vproxy_core::netstack::device::channel_device;
-use vproxy_core::netstack::fakedns::{FakeDns, DEFAULT_POOL};
-use vproxy_core::netstack::flows::{FlowLog, DEFAULT_CAPACITY};
-use vproxy_core::netstack::Netstack;
-use vproxy_core::proxy::direct_dns::DirectResolver;
-use vproxy_core::proxy::dns_cache::DnsCache;
-use vproxy_core::proxy::stats::{human_bytes, STATS};
-use vproxy_core::{ActiveServer, ProxyClient};
 
 /// Names handed out by the fake DNS before the oldest is reused.
 const FAKE_DNS_CAPACITY: u32 = 16_384;
@@ -122,7 +122,7 @@ fn start(
     on_packet: PacketCallback,
     ctx: HostContext,
 ) -> anyhow::Result<Tunnel> {
-    let mut config = vproxy_core::config::servers::config_from_link(link, 0)?;
+    let mut config = ratatosk_core::config::servers::config_from_link(link, 0)?;
     config
         .routing
         .direct_suffix
@@ -397,18 +397,18 @@ pub unsafe extern "C" fn ratatosk_ping(links_json: *const c_char, timeout_ms: u3
     else {
         return std::ptr::null_mut();
     };
-    let servers: Vec<Option<vproxy_core::ServerConfig>> = links
+    let servers: Vec<Option<ratatosk_core::ServerConfig>> = links
         .iter()
         .map(|link| {
-            vproxy_core::config::servers::config_from_link(link, 0)
+            ratatosk_core::config::servers::config_from_link(link, 0)
                 .ok()
                 .map(|c| c.server)
         })
         .collect();
-    let valid: Vec<vproxy_core::ServerConfig> = servers.iter().flatten().cloned().collect();
+    let valid: Vec<ratatosk_core::ServerConfig> = servers.iter().flatten().cloned().collect();
     let limit = Duration::from_millis(u64::from(timeout_ms.max(1)));
     let measured = match blocking_runtime() {
-        Ok(runtime) => runtime.block_on(vproxy_core::proxy::runtime::ping_servers(&valid, limit)),
+        Ok(runtime) => runtime.block_on(ratatosk_core::proxy::runtime::ping_servers(&valid, limit)),
         Err(_) => return std::ptr::null_mut(),
     };
     let mut measured = measured.into_iter();
@@ -435,7 +435,9 @@ pub unsafe extern "C" fn ratatosk_fetch_subscription(url: *const c_char) -> *mut
     let result = match (c_str(url), blocking_runtime()) {
         (None, _) => Err(anyhow::anyhow!("url is NULL or not UTF-8")),
         (_, Err(e)) => Err(e.into()),
-        (Some(url), Ok(runtime)) => runtime.block_on(vproxy_core::config::subscription::fetch(url)),
+        (Some(url), Ok(runtime)) => {
+            runtime.block_on(ratatosk_core::config::subscription::fetch(url))
+        }
     };
     let json = match result {
         Ok(sub) => {
@@ -498,10 +500,10 @@ fn owned_string(s: String) -> *mut c_char {
         .unwrap_or(std::ptr::null_mut())
 }
 
-/// `vproxy-ffi <version>`, static.
+/// `ratatosk-ffi <version>`, static.
 #[no_mangle]
 pub extern "C" fn ratatosk_version() -> *const c_char {
-    concat!("vproxy-ffi ", env!("CARGO_PKG_VERSION"), "\0")
+    concat!("ratatosk-ffi ", env!("CARGO_PKG_VERSION"), "\0")
         .as_ptr()
         .cast()
 }

@@ -1,4 +1,9 @@
 use anyhow::{Context, Result};
+use ratatosk_cli::paths::{config_dir_for, user_config_dir};
+use ratatosk_cli::runtime::{serve, serve_with_server};
+use ratatosk_cli::{logging, system, ui};
+use ratatosk_core::config::servers::config_from_link;
+use ratatosk_core::{ActiveServer, Config, ServerList};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -6,10 +11,6 @@ use tracing::{info, Level};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
-use vproxy_cli::runtime::{serve, serve_with_server};
-use vproxy_cli::{logging, system, ui};
-use vproxy_core::config::servers::config_from_link;
-use vproxy_core::{ActiveServer, Config, ServerList};
 
 /// Subcommands that run instead of the proxy.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,7 +83,7 @@ async fn main() -> Result<()> {
     if let Some(command) = &args.command {
         return run_subcommand(command.clone(), args).await;
     }
-    info!("vproxy {} starting", env!("CARGO_PKG_VERSION"));
+    info!("ratatosk {} starting", env!("CARGO_PKG_VERSION"));
     let mut args = args;
     if prepare_subscription(&mut args).await? {
         return Ok(());
@@ -127,7 +128,7 @@ async fn main() -> Result<()> {
     }
 
     if args.probe {
-        let report = vproxy_core::proxy::runtime::probe_transport(config.as_ref()).await?;
+        let report = ratatosk_core::proxy::runtime::probe_transport(config.as_ref()).await?;
         info!("{report}");
         return Ok(());
     }
@@ -135,8 +136,12 @@ async fn main() -> Result<()> {
     if args.ping {
         let limit = Duration::from_secs(config.runtime.connect_timeout_secs.clamp(1, 10));
         let list: Vec<_> = servers.entries.iter().map(|e| e.server.clone()).collect();
-        let results = vproxy_core::proxy::runtime::ping_servers(&list, limit).await;
-        let mut rows: Vec<(usize, &vproxy_core::ServerEntry, &Result<Duration, String>)> = servers
+        let results = ratatosk_core::proxy::runtime::ping_servers(&list, limit).await;
+        let mut rows: Vec<(
+            usize,
+            &ratatosk_core::ServerEntry,
+            &Result<Duration, String>,
+        )> = servers
             .entries
             .iter()
             .zip(results.iter())
@@ -214,15 +219,15 @@ async fn service_install(args: Args) -> Result<()> {
     } else if let Some(link) = &args.vless_url {
         // The service cannot take the link on its command line safely; keep it in a file.
         let dir = crate::system::service::real_home()
-            .map(|h| h.join(".config").join("vproxy"))
+            .map(|h| config_dir_for(&h))
             .ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
         let file = dir.join("service.txt");
-        vproxy_core::config::write_private(&file, format!("{link}\n"))?;
+        ratatosk_core::config::write_private(&file, format!("{link}\n"))?;
         service_args.extend(["-f".to_string(), file.display().to_string()]);
         check.vless_url = None;
         check.url_file = Some(file);
     } else {
-        // Same discovery as a plain `vproxy`, but the daemon has no cwd of ours.
+        // Same discovery as a plain `ratatosk`, but the daemon has no cwd of ours.
         match discover_source()? {
             Some(DiscoveredSource::Url(_, path)) => {
                 let path = absolute(&path)?;
@@ -259,7 +264,7 @@ async fn service_install(args: Args) -> Result<()> {
     }
     let binary = std::env::current_exe()?
         .canonicalize()
-        .context("cannot resolve the vproxy binary path")?;
+        .context("cannot resolve the ratatosk binary path")?;
     let plan = crate::system::service::ServicePlan {
         tun: args.tun,
         binary,
@@ -273,7 +278,7 @@ async fn service_install(args: Args) -> Result<()> {
         plan.args.join(" ")
     );
     info!(
-        "Logs: {}. Remove with: {}vproxy service uninstall{}",
+        "Logs: {}. Remove with: {}ratatosk service uninstall{}",
         p.log.display(),
         if args.tun { "sudo " } else { "" },
         if args.tun { " --tun" } else { "" }
@@ -282,7 +287,7 @@ async fn service_install(args: Args) -> Result<()> {
 }
 
 /// The TUI keeps logs in memory and mirrors them to a size-capped file
-/// (`~/.config/vproxy/vproxy.log`, 5 MiB × 3 by default). `none` disables it.
+/// (`~/.config/ratatosk/ratatosk.log`, 5 MiB × 3 by default). `none` disables it.
 /// Failing to open the file is reported after the subscriber is up, not fatal.
 fn open_tui_log_file(path: Option<&Path>) -> Option<crate::logging::RotatingFile> {
     if path.map(|p| p.as_os_str() == "none").unwrap_or(false) {
@@ -290,7 +295,7 @@ fn open_tui_log_file(path: Option<&Path>) -> Option<crate::logging::RotatingFile
     }
     let path = match path {
         Some(p) => p.to_path_buf(),
-        None => user_config_dir()?.join("vproxy.log"),
+        None => user_config_dir()?.join("ratatosk.log"),
     };
     match crate::logging::RotatingFile::open(
         &path,
@@ -353,11 +358,11 @@ async fn prepare_subscription(args: &mut Args) -> Result<bool> {
         });
         info!(
             "Fetching subscription {}",
-            vproxy_core::config::subscription::redact_url(&url)
+            ratatosk_core::config::subscription::redact_url(&url)
         );
-        let sub = vproxy_core::config::subscription::fetch(&url).await?;
+        let sub = ratatosk_core::config::subscription::fetch(&url).await?;
         if let Some(dir) = file.parent().filter(|d| !d.as_os_str().is_empty()) {
-            vproxy_core::config::create_private_dir(dir)?;
+            ratatosk_core::config::create_private_dir(dir)?;
         }
         let mut list = if file.is_file() {
             ServerList::from_file(&file, inbound_port).unwrap_or_else(|_| ServerList {
@@ -365,7 +370,7 @@ async fn prepare_subscription(args: &mut Args) -> Result<bool> {
                 ..Default::default()
             })
         } else {
-            vproxy_core::config::write_private(&file, "")?;
+            ratatosk_core::config::write_private(&file, "")?;
             ServerList {
                 file: Some(file.clone()),
                 ..Default::default()
@@ -388,7 +393,7 @@ async fn prepare_subscription(args: &mut Args) -> Result<bool> {
     let Ok(content) = std::fs::read_to_string(&file) else {
         return Ok(false);
     };
-    let Some(meta) = vproxy_core::config::subscription::Meta::from_lines(content.lines()) else {
+    let Some(meta) = ratatosk_core::config::subscription::Meta::from_lines(content.lines()) else {
         if args.refresh {
             anyhow::bail!(
                 "{} has no `# subscription:` header; start once with -s URL",
@@ -403,11 +408,11 @@ async fn prepare_subscription(args: &mut Args) -> Result<bool> {
                 "Subscription {} ({}): refreshing",
                 meta.title
                     .clone()
-                    .unwrap_or_else(|| vproxy_core::config::subscription::redact_url(&meta.url)),
+                    .unwrap_or_else(|| ratatosk_core::config::subscription::redact_url(&meta.url)),
                 meta.age_text()
             );
         }
-        match vproxy_core::config::subscription::fetch(&meta.url).await {
+        match ratatosk_core::config::subscription::fetch(&meta.url).await {
             Ok(sub) => {
                 let mut list = ServerList::from_file(&file, inbound_port)?;
                 list.apply_subscription(&sub, inbound_port)?;
@@ -421,7 +426,7 @@ async fn prepare_subscription(args: &mut Args) -> Result<bool> {
 }
 
 fn subscription_summary(
-    sub: &vproxy_core::config::subscription::Subscription,
+    sub: &ratatosk_core::config::subscription::Subscription,
     list: &ServerList,
     file: &std::path::Path,
 ) -> String {
@@ -451,7 +456,7 @@ fn subscription_summary(
 fn read_url_file(path: &PathBuf) -> Result<String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| anyhow::anyhow!("Cannot read {}: {e}", path.display()))?;
-    if let Some(active) = vproxy_core::config::servers::active_link(&content) {
+    if let Some(active) = ratatosk_core::config::servers::active_link(&content) {
         return Ok(active);
     }
     content
@@ -467,11 +472,7 @@ fn read_url_file(path: &PathBuf) -> Result<String> {
         })
 }
 
-/// `~/.config/vproxy`
-fn user_config_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config").join("vproxy"))
-}
-
+/// `~/.config/ratatosk`, or the legacy `~/.config/vproxy` (see [`ratatosk_cli::paths`]).
 enum DiscoveredSource {
     /// First link and the links file it came from.
     Url(String, PathBuf),
@@ -479,7 +480,7 @@ enum DiscoveredSource {
 }
 
 /// Without explicit arguments look for `./server.txt`, then
-/// `~/.config/vproxy/config.toml`, then `~/.config/vproxy/server.txt`.
+/// `~/.config/ratatosk/config.toml`, then `~/.config/ratatosk/server.txt`.
 fn discover_source() -> Result<Option<DiscoveredSource>> {
     let local = PathBuf::from("server.txt");
     if local.is_file() {
@@ -512,13 +513,13 @@ fn clean_pasted_link(raw: &str) -> String {
 }
 
 /// First run: ask for a vless:// (or Amnezia vpn://) link on the terminal, validate it and save it
-/// to `~/.config/vproxy/server.txt` so the next start needs no arguments.
+/// to `~/.config/ratatosk/server.txt` so the next start needs no arguments.
 fn ask_for_link() -> Result<String> {
     use std::io::{BufRead, IsTerminal, Write};
     if !std::io::stdin().is_terminal() {
         anyhow::bail!(
             "No config provided. Use --config, --url, --url-file, put a vless:// link into ./server.txt \
-             or ~/.config/vproxy/server.txt, or run vproxy in a terminal to be asked for one"
+             or ~/.config/ratatosk/server.txt, or run ratatosk in a terminal to be asked for one"
         );
     }
     let mut stderr = std::io::stderr();
@@ -538,9 +539,9 @@ fn ask_for_link() -> Result<String> {
             Ok(config) => {
                 if let Some(dir) = user_config_dir() {
                     let path = dir.join("server.txt");
-                    match vproxy_core::config::write_private(&path, format!("{link}\n")) {
+                    match ratatosk_core::config::write_private(&path, format!("{link}\n")) {
                         Ok(()) => info!(
-                            "Saved to {} ({}); next time just run `vproxy`",
+                            "Saved to {} ({}); next time just run `ratatosk`",
                             path.display(),
                             config
                                 .server
@@ -625,7 +626,7 @@ fn load_config(args: Args) -> Result<(Config, ServerList)> {
             .is_some_and(|e| e.eq_ignore_ascii_case("vpn"))
         {
             let config =
-                vproxy_core::config::import::amnezia::load_file(&config_path, args.inbound_port)?;
+                ratatosk_core::config::import::amnezia::load_file(&config_path, args.inbound_port)?;
             let servers = ServerList::single(config.server.clone());
             info!(
                 "Imported Amnezia config: {} {}:{} ({} over {})",
@@ -641,7 +642,8 @@ fn load_config(args: Args) -> Result<(Config, ServerList)> {
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("json"))
         {
-            let config = vproxy_core::config::import::xray::load(&config_path, args.inbound_port)?;
+            let config =
+                ratatosk_core::config::import::xray::load(&config_path, args.inbound_port)?;
             let servers = ServerList::single(config.server.clone());
             info!(
                 "Imported Xray config: {} {}:{} ({} over {}{})",
@@ -762,7 +764,7 @@ fn parse_args() -> Result<Args> {
             Some("--tui") => tui = true,
             Some("--split-ru") => {
                 direct_zones.extend(
-                    vproxy_core::proxy::routing::RU_ZONE
+                    ratatosk_core::proxy::routing::RU_ZONE
                         .iter()
                         .map(|s| s.to_string()),
                 );
@@ -795,7 +797,7 @@ fn parse_args() -> Result<Args> {
                 std::process::exit(0);
             }
             Some("-V") | Some("--version") => {
-                println!("vproxy {}", env!("CARGO_PKG_VERSION"));
+                println!("ratatosk {}", env!("CARGO_PKG_VERSION"));
                 std::process::exit(0);
             }
             Some(value) if value.starts_with('-') => {
@@ -843,15 +845,15 @@ fn parse_args() -> Result<Args> {
 fn print_help() {
     println!(
         "\
-vproxy - terminal VLESS client
+ratatosk - terminal VLESS client
 
 Usage:
-  vproxy [OPTIONS] [config-path|vless://...|vpn://...]
-  vproxy service install|uninstall|status|logs [--tun] [config options]
+  ratatosk [OPTIONS] [config-path|vless://...|vpn://...]
+  ratatosk service install|uninstall|status|logs [--tun] [config options]
 
-Without arguments vproxy uses ./server.txt, then ~/.config/vproxy/config.toml or
-~/.config/vproxy/server.txt; if none exists it asks for a vless:// link (pasted as
-is, no quoting) and saves it to ~/.config/vproxy/server.txt. A links file may hold
+Without arguments ratatosk uses ./server.txt, then ~/.config/ratatosk/config.toml or
+~/.config/ratatosk/server.txt; if none exists it asks for a vless:// link (pasted as
+is, no quoting) and saves it to ~/.config/ratatosk/server.txt. A links file may hold
 several servers (one per line): the first is used, --tui switches between them.
 
 Options:
@@ -859,7 +861,7 @@ Options:
   -u, --url <LINK>          vless:// link or Amnezia vpn:// link, quote it in the shell
   -f, --url-file <PATH>     Read the link from a file (first non-comment line)
   -s, --subscription <URL>  Fetch a subscription (base64 or plain list of links) into the links file
-                            (-f or ~/.config/vproxy/server.txt), then run; refreshed automatically
+                            (-f or ~/.config/ratatosk/server.txt), then run; refreshed automatically
                             when older than the provider's interval, by u in the TUI, or --refresh
       --refresh             Update the links file from its subscription and exit
   -p, --inbound-port <PORT> Local inbound port (default: 1080)
@@ -870,7 +872,7 @@ Options:
       --ping                Measure the handshake latency of every server in the list and exit
       --tun                 System-wide mode: a native in-process TUN, all traffic through the tunnel (macOS/Linux, needs root)
       --tui                 Terminal UI with live counters and logs (q to quit); the log is also
-                            written to ~/.config/vproxy/vproxy.log (5 MiB, 3 rotated copies kept)
+                            written to ~/.config/ratatosk/ratatosk.log (5 MiB, 3 rotated copies kept)
       --log-file <PATH>     --tui: log file instead of the default; none keeps logs in memory only
       --split-ru            Split-tunnel: route the Russian zone (.ru .su .рф) direct, not through the proxy
       --direct-zone <CSV>   Split-tunnel: comma list of domain suffixes to route direct, e.g. ru,su,рф,cn
@@ -878,20 +880,20 @@ Options:
   -V, --version             Print version
 
 Commands:
-  service install           Run vproxy in the background (launchd / systemd), start at login or boot;
+  service install           Run ratatosk in the background (launchd / systemd), start at login or boot;
                             with --tun a system daemon (sudo). uninstall, status and logs manage it
 
 Examples:
-  vproxy config.toml
-  vproxy --url 'vless://uuid@host:port?security=tls'
-  vproxy -u 'vless://...' -p 8080
-  vproxy -f server.txt -p 1080
-  vproxy --ping -f server.txt                     # latency of every server in the file
-  vproxy -s 'https://provider/sub/token' --tui    # subscription → ~/.config/vproxy/server.txt
-  sudo vproxy --tun -f server.txt
-  sudo vproxy --tui --tun -f server.txt
-  vproxy service install -f server.txt            # background local proxy, starts at login
-  sudo vproxy service install --tun -f server.txt # background system-wide VPN
+  ratatosk config.toml
+  ratatosk --url 'vless://uuid@host:port?security=tls'
+  ratatosk -u 'vless://...' -p 8080
+  ratatosk -f server.txt -p 1080
+  ratatosk --ping -f server.txt                     # latency of every server in the file
+  ratatosk -s 'https://provider/sub/token' --tui    # subscription → ~/.config/ratatosk/server.txt
+  sudo ratatosk --tun -f server.txt
+  sudo ratatosk --tui --tun -f server.txt
+  ratatosk service install -f server.txt            # background local proxy, starts at login
+  sudo ratatosk service install --tun -f server.txt # background system-wide VPN
 "
     );
 }

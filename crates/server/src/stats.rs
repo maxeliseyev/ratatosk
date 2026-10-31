@@ -1,6 +1,6 @@
 //! Live server counters and a point-in-time [`Snapshot`] of them. The server
 //! serves snapshots as newline-delimited JSON over a local Unix socket (see
-//! `admin`), which `vproxy-server --stats` and `--tui` read.
+//! `admin`), which `ratatosk-server --stats` and `--tui` read.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};

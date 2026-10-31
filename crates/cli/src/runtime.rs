@@ -1,12 +1,12 @@
 //! Desktop process lifecycle: signals, proxy listeners and sidecars.
 
 use anyhow::Result;
+use ratatosk_core::proxy::runtime::serve_with_shutdown;
+use ratatosk_core::{ActiveServer, Config};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
 use tracing::{info, warn};
-use vproxy_core::proxy::runtime::serve_with_shutdown;
-use vproxy_core::{ActiveServer, Config};
 
 pub async fn serve(config: Arc<Config>) -> Result<()> {
     let active = ActiveServer::new(config.server.clone());

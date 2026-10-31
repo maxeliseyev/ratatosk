@@ -1,7 +1,7 @@
 # Ratatosk roadmap
 
-(Проект Ratatosk; исторически — vproxy. Имена крейтов и бинарников `vproxy`/
-`vproxy-server` пока прежние, переименование артефактов — отдельным релизом.)
+(Проект Ratatosk; исторически — vproxy. Крейты, бинарники и образы
+переименованы в `ratatosk`/`ratatosk-server`.)
 
 Актуальная рабочая точка на 2026-10-26:
 [checkpoint-2026-10-26.md](docs/checkpoint-2026-10-26.md).
@@ -14,7 +14,7 @@ Workspace разделён на ядро, CLI, сервер и FFI; сервер
 
 ## 1. Цель проекта
 
-`vproxy` — это терминальный VLESS-клиент на Rust для macOS/Linux без тяжёлого GUI, который:
+`ratatosk` — это терминальный VLESS-клиент на Rust для macOS/Linux без тяжёлого GUI, который:
 
 - можно запускать как локальный прокси в CLI
 - можно развивать как reusable Rust core
@@ -92,7 +92,7 @@ Workspace разделён на ядро, CLI, сервер и FFI; сервер
 
  33. **Набор для измерений за ТСПУ (2026-10-19, стадия 1 плана `docs/h3-transport-plan.md`)**
     - `deploy/trial-server/`: Caddy с HTTP/3 на 443/udp и настоящим сертификатом, файлы 10 МБ и 1 ГБ, журнал доступа для H8, iperf3 на 5201, Hysteria 2 в двух вариантах (Brutal на 8443, BBR на 8444) с маскировкой на тот же сайт; `setup.sh домен` генерирует `.env`, файлы, конфиги и ссылки `hysteria2://`.
-    - `scripts/tspu-trial.sh` для тестировщиков (bash 3.2+, macOS/Linux/WSL): один прогон = TCP h2 с Alt-Svc, H1 QUIC handshake, H2 10 МБ и 1 ГБ по HTTP/3 с детектором заморозки (меньше 2 КБ/с за 20 с), долгое соединение 50 КБ/с, H6 четыре параллельных QUIC-соединения с проверкой заморозки через 10/130/310 с, H3 iperf3 UDP, H0 vproxy с двумя REALITY-ссылками (`fp=chrome`/`fp=chrome133`) через SOCKS; curl с HTTP/3 ищется сам (Homebrew keg-only), внешний IP и страна через ipinfo, прокси-переменные снимаются, отчёт в формате таблицы со страницы испытаний плюс сырой лог.
+    - `scripts/tspu-trial.sh` для тестировщиков (bash 3.2+, macOS/Linux/WSL): один прогон = TCP h2 с Alt-Svc, H1 QUIC handshake, H2 10 МБ и 1 ГБ по HTTP/3 с детектором заморозки (меньше 2 КБ/с за 20 с), долгое соединение 50 КБ/с, H6 четыре параллельных QUIC-соединения с проверкой заморозки через 10/130/310 с, H3 iperf3 UDP, H0 ratatosk с двумя REALITY-ссылками (`fp=chrome`/`fp=chrome133`) через SOCKS; curl с HTTP/3 ищется сам (Homebrew keg-only), внешний IP и страна через ipinfo, прокси-переменные снимаются, отчёт в формате таблицы со страницы испытаний плюс сырой лог.
     - `docs/trial-server-runbook.md`: выбор провайдера и локации (зарубежный VPS, разные ASN для H7), домен и DNS-only, базовая настройка Ubuntu, firewall с оговоркой про Docker, UDP-буферы, запуск стенда, проверка с тестировщика, прогон H1/H2/H3/H6/H0, лог для H8 и разбор типовых сбоев.
     - Проверено локально: нативный Caddy на loopback (Docker Desktop на macOS не доставляет UDP на localhost, на Linux-VPS такой проблемы нет), iperf3, REALITY-сервер.
 
@@ -104,8 +104,8 @@ Workspace разделён на ядро, CLI, сервер и FFI; сервер
 
  31. **Поддержание форка rustls в актуальном состоянии (2026-10-18)**
      - Форк `maxeliseyev/rustls` (ветка `reality-0.23`, 6 коммитов поверх upstream `rel-0.23`) надо двигать за upstream: 0.23.x выходит примерно раз в месяц, в том числе с security-фиксами, а `cargo audit` видит только номер версии из форка.
-     - Workflow `rustls fork sync` (`.github/workflows/rustls-sync.yml`, по понедельникам 06:00 UTC и вручную) вызывает `.github/scripts/rustls-sync.sh`: fetch upstream `rel-0.23`, merge в `reality-0.23` (merge, а не rebase, чтобы все когда-либо запинённые `rev` оставались доступны), полный `cargo test -p rustls --all-features --all-targets`, push форка через deploy-ключ (секрет `RUSTLS_FORK_DEPLOY_KEY`, ключ с правом записи только на репозиторий форка), затем bump `rev` в `Cargo.toml`, `cargo update -p rustls`, fmt/clippy/тесты vproxy и коммит в `main`. Конфликт слияния, любой другой сбой и выход rustls 0.24 становятся issue в vproxy (0.24 один раз: патчи придётся переносить на новую ветку вручную).
-     - Скрипт запускается и локально: `DRY_RUN=1 .github/scripts/rustls-sync.sh` ничего не пушит и не коммитит. Проверены все три пути: `none` (текущее состояние), `bump` (копия vproxy с устаревшим `rev`), `merge` (копия форка, откаченная на v/0.23.45: 29 upstream-коммитов слились без конфликтов, включая `client/hs.rs`).
+     - Workflow `rustls fork sync` (`.github/workflows/rustls-sync.yml`, по понедельникам 06:00 UTC и вручную) вызывает `.github/scripts/rustls-sync.sh`: fetch upstream `rel-0.23`, merge в `reality-0.23` (merge, а не rebase, чтобы все когда-либо запинённые `rev` оставались доступны), полный `cargo test -p rustls --all-features --all-targets`, push форка через deploy-ключ (секрет `RUSTLS_FORK_DEPLOY_KEY`, ключ с правом записи только на репозиторий форка), затем bump `rev` в `Cargo.toml`, `cargo update -p rustls`, fmt/clippy/тесты ratatosk и коммит в `main`. Конфликт слияния, любой другой сбой и выход rustls 0.24 становятся issue в ratatosk (0.24 один раз: патчи придётся переносить на новую ветку вручную).
+     - Скрипт запускается и локально: `DRY_RUN=1 .github/scripts/rustls-sync.sh` ничего не пушит и не коммитит. Проверены все три пути: `none` (текущее состояние), `bump` (копия ratatosk с устаревшим `rev`), `merge` (копия форка, откаченная на v/0.23.45: 29 upstream-коммитов слились без конфликтов, включая `client/hs.rs`).
      - Ограничение: коммит бота в `main` не запускает `ci.yml` (GITHUB_TOKEN не триггерит workflow), поэтому Linux-проверки делает сам sync-job, а macOS-прогон случится при следующем ручном push.
 
  30. **Проверка безопасности ядра и поверхности атаки (2026-10-18, v0.11.0 → main)**
@@ -114,17 +114,17 @@ Workspace разделён на ядро, CLI, сервер и FFI; сервер
      - Сознательно не сделано: spider-поведение Xray при чужом сертификате (мы просто рвём соединение, это заметно активному проберу, но безопасно); `pqv` (ML-DSA-65) проверка сервера; запуск root-сервиса только из root-owned бинарников (сломало бы Homebrew-сценарий); ALPS-ответ сервера (rustls не шлёт ClientEncryptedExtensions, затрагивает только BoringSSL-серверы с ALPS, которых среди VLESS-серверов нет).
 
  29. **Сборки arm64/musl и Docker-образ (2026-10-18)**
-     - release.yml: `linux-arm64` (нативно на `ubuntu-22.04-arm`), `linux-x86_64-musl` и `linux-arm64-musl` (musl-tools, статические бинарники); job `docker` собирает multi-arch образ `ghcr.io/maxeliseyev/vproxy:<ver>` и `:latest` из musl-бинарников (`.github/docker/Dockerfile`)
+     - release.yml: `linux-arm64` (нативно на `ubuntu-22.04-arm`), `linux-x86_64-musl` и `linux-arm64-musl` (musl-tools, статические бинарники); job `docker` собирает multi-arch образ `ghcr.io/maxeliseyev/ratatosk:<ver>` и `:latest` из musl-бинарников (`.github/docker/Dockerfile`)
      - корневой `Dockerfile` собирает из исходников на `rust:1-alpine` (aws-lc-sys под musl: build-base, cmake, perl); образ на `alpine` с `ca-certificates`, слушает `0.0.0.0:1080`, конфиг через `/data/server.txt`, `-s URL` или `-u`
-     - `-l/--listen <ADDR>` для адреса inbound (в контейнере `0.0.0.0`), пробрасывается и в `service install`; `install.sh` понимает arm64 и выбирает musl на Alpine / без glibc (`VPROXY_LIBC=musl` принудительно)
+     - `-l/--listen <ADDR>` для адреса inbound (в контейнере `0.0.0.0`), пробрасывается и в `service install`; `install.sh` понимает arm64 и выбирает musl на Alpine / без glibc (`RATATOSK_LIBC=musl` принудительно)
 
  28. **Структура исходников (2026-10-18)**
      - `src/` разложен по слоям: `config/` (+ `import/`), `protocol/` (+ `reality/`), `transport/`, `inbound/`, `proxy/`, `system/`, `ui/`; публичные типы для CLI и тестов реэкспортируются из `lib.rs`; история файлов сохранена через `git mv`
 
  27. **Подписки (2026-10-18)**
-     - `src/subscription.rs`: загрузка по URL (reqwest, UA `vproxy/<ver>`), тело base64 (std/url-safe, с паддингом и без, с переносами) или plain, берутся `vless://` и `vpn://`, остальные протоколы считаются пропущенными; заголовки `subscription-userinfo`, `profile-title` (в т.ч. `base64:`), `profile-update-interval`
+     - `src/subscription.rs`: загрузка по URL (reqwest, UA `ratatosk/<ver>`), тело base64 (std/url-safe, с паддингом и без, с переносами) или plain, берутся `vless://` и `vpn://`, остальные протоколы считаются пропущенными; заголовки `subscription-userinfo`, `profile-title` (в т.ч. `base64:`), `profile-update-interval`
      - файл ссылок с заголовком `# subscription/title/updated/interval/traffic/active` и секцией `# manual` (маркер пишется всегда, чтобы дописанные руками ссылки переживали обновление); для управляемого файла выбор сервера пишется в `# active:`, порядок не меняется
-     - `-s URL` (в `-f` или `~/.config/vproxy/server.txt`), `--refresh`, автообновление при старте если список старше интервала (ошибка сети не мешает запуску), `u` в TUI с фоновой загрузкой и перезамером задержек
+     - `-s URL` (в `-f` или `~/.config/ratatosk/server.txt`), `--refresh`, автообновление при старте если список старше интервала (ошибка сети не мешает запуску), `u` в TUI с фоновой загрузкой и перезамером задержек
      - проверено на локальном фейковом сервере подписки с реальными ссылками: `-s`, автообновление, `--refresh`, сохранение ручной ссылки, `u` в pty
 
  26. **Ping и автовыбор сервера (2026-10-18)**
@@ -138,8 +138,8 @@ Workspace разделён на ядро, CLI, сервер и FFI; сервер
      - проверено: JA4 `t13d1516h2_8daaf6152771_d8a2da3f94cd` (Chrome) и по нашему расчёту, и у tls.peet.ws (`examples/fingerprint.rs`); REALITY-аутентификация с локальным xray и боевым сервером, WS+TLS — без изменений
 
  24. **Установка sing-box и фоновый сервис (2026-10-18)**
-     - `src/singbox.rs`: поиск бинарника (`--sing-box`/`tun.sing_box_path`, `~/.config/vproxy/bin`, PATH, Homebrew, системные префиксы, бандл Happ; под sudo ищется и дом реального пользователя); `vproxy install-sing-box`: Homebrew на macOS (без него предлагает поставить Homebrew), официальный скрипт репозитория sing-box на deb/rpm/Arch, иначе релиз с GitHub под ОС/CPU в `~/.config/vproxy/bin` (`--download` принудительно); `--tun` без sing-box предлагает установку на месте
-     - `src/service.rs`: `vproxy service install|uninstall|status|logs [--tun]` генерирует launchd plist (агент пользователя или системный демон) или systemd unit (user или system с root и CAP_NET_ADMIN), пишет абсолютные пути к бинарнику, конфигу и sing-box, запускает и включает автозапуск; логи в файл без ANSI
+     - `src/singbox.rs`: поиск бинарника (`--sing-box`/`tun.sing_box_path`, `~/.config/ratatosk/bin`, PATH, Homebrew, системные префиксы, бандл Happ; под sudo ищется и дом реального пользователя); `ratatosk install-sing-box`: Homebrew на macOS (без него предлагает поставить Homebrew), официальный скрипт репозитория sing-box на deb/rpm/Arch, иначе релиз с GitHub под ОС/CPU в `~/.config/ratatosk/bin` (`--download` принудительно); `--tun` без sing-box предлагает установку на месте
+     - `src/service.rs`: `ratatosk service install|uninstall|status|logs [--tun]` генерирует launchd plist (агент пользователя или системный демон) или systemd unit (user или system с root и CAP_NET_ADMIN), пишет абсолютные пути к бинарнику, конфигу и sing-box, запускает и включает автозапуск; логи в файл без ANSI
      - проверено: загрузка релиза в scratch-HOME и запуск `sing-box version`; цикл install → status → слушающий порт → uninstall для launchd-агента
 
  23. **XHTTP-транспорт (2026-10-17)**
@@ -172,13 +172,13 @@ Workspace разделён на ядро, CLI, сервер и FFI; сервер
 
  18. **WebSocket-транспорт и импорт Xray JSON (2026-10-16)**
      - `src/ws.rs`: WS поверх TLS или TCP через tokio-tungstenite (без его TLS), бинарные фреймы, адаптер AsyncRead/AsyncWrite; `type=ws` + `path`/`host` в ссылках, `server.transport`/`ws_path`/`ws_host` в TOML
-     - `src/xray_import.rs`: `vproxy -c happ.json` — vless-outbound, socks-inbound, `routing.rules` (domain:/full:/keyword:/geosite:, geoip:, cidr, порты)
+     - `src/xray_import.rs`: `ratatosk -c happ.json` — vless-outbound, socks-inbound, `routing.rules` (domain:/full:/keyword:/geosite:, geoip:, cidr, порты)
      - попутно найден и исправлен старый баг: `security=tls` падал с паникой rustls (две крипто-фичи в сборке), теперь провайдер задан явно, есть регрессионный тест
      - проверено на боевом WS+TLS сервере: upgrade, трафик, 2 МБ по хэшу, upload; e2e-тест WS с mock-сервером
 
  17. **Первый запуск без аргументов (2026-10-16)**
-     - поиск ссылки: `./server.txt` → `~/.config/vproxy/config.toml` → `~/.config/vproxy/server.txt`
-     - интерактивный запрос `vless://` ссылки со stdin (без shell-кавычек), валидация, до трёх попыток, сохранение в `~/.config/vproxy/server.txt`
+     - поиск ссылки: `./server.txt` → `~/.config/ratatosk/config.toml` → `~/.config/ratatosk/server.txt`
+     - интерактивный запрос `vless://` ссылки со stdin (без shell-кавычек), валидация, до трёх попыток, сохранение в `~/.config/ratatosk/server.txt`
      - без терминала (launchd/systemd) — понятная ошибка вместо зависания
      - README переписан компактно: установка, быстрый старт, конфиг, достижения; релиз v0.3.0
 
@@ -186,7 +186,7 @@ Workspace разделён на ядро, CLI, сервер и FFI; сервер
      - `.github/workflows/ci.yml`: fmt, clippy, тесты на ubuntu и macos
      - `.github/workflows/release.yml`: по тегу `v*` сборки macOS arm64, macOS x86_64 (кросс с arm64-раннера), Linux x86_64; tar.gz + sha256 в GitHub Release
      - `install.sh`: определяет платформу, качает последний релиз, проверяет sha256, ставит в `/usr/local/bin` или `~/.local/bin`
-     - `vproxy --version`, версия 0.2.0
+     - `ratatosk --version`, версия 0.2.0
 
  15. **Routing-правила (2026-10-16)**
      - `src/routing.rs`: `[routing]` с семантикой sing-box (AND внутри правила, OR в списках, первое совпадение); direct/proxy/block по domain*, ip_cidr, ip_private, port
@@ -203,9 +203,9 @@ Workspace разделён на ядро, CLI, сервер и FFI; сервер
 
  13. **TUN-режим и service/ops (2026-10-16)**
      - `src/tun.rs`: генератор конфига sing-box (tun-inbound → socks-outbound на наш inbound) и sidecar-процесс, живущий вместе с сервером; `--tun`, `--print-tun-config`, секция `[tun]`
-     - защита от петли: process_name (vproxy, sing-box, xray) и адрес сервера → direct, их DNS → direct; остальной DNS через туннель по умолчанию
+     - защита от петли: process_name (ratatosk, sing-box, xray) и адрес сервера → direct, их DNS → direct; остальной DNS через туннель по умолчанию
      - конфиг проверен `sing-box check` (1.12.12); живой запуск требует root и выключенного Happ (два TUN не уживутся)
-     - `docs/launchd/*.plist` и `docs/systemd/vproxy.service` как примеры автозапуска
+     - `docs/launchd/*.plist` и `docs/systemd/ratatosk.service` как примеры автозапуска
      - логи переведены в stderr, stdout только для данных
      - **Комментарий:** ровно схема Happ, без собственного TUN-стека; покрывает пункт 3 из раздела 4.
 
@@ -217,13 +217,13 @@ Workspace разделён на ядро, CLI, сервер и FFI; сервер
      - проверено против локального xray-core 26.7.28: TLS 1.3 → direct copy в обе стороны (5 МБ, хэш совпал, ~7 МБ/с), TLS 1.2 → путь End (upload 300 КБ и download 2 МБ, хэши совпали)
      - добавлена гибридная группа X25519MLKEM768 (`aws-lc-rs` ML-KEM-768 + свой X25519): актуальный REALITY-сервер отвергает ClientHello без неё, а для auth key берёт X25519-share, который rustls шлёт вторым
      - проверено на боевом сервере пользователя: handshake, 5 МБ download с совпавшим хэшем, upload, параллельные запросы
-     - **Комментарий:** sidecar теперь нужен только для Vision поверх plain TLS. При включённом Happ его TUN заворачивает трафик vproxy в свой же туннель до того же сервера, и сервер такие соединения не аутентифицирует — для тестов vproxy нужно выводить из TUN (или выключать Happ).
+     - **Комментарий:** sidecar теперь нужен только для Vision поверх plain TLS. При включённом Happ его TUN заворачивает трафик ratatosk в свой же туннель до того же сервера, и сервер такие соединения не аутентифицирует — для тестов ratatosk нужно выводить из TUN (или выключать Happ).
 
  11. **Native REALITY (2026-10-16)**
      - `src/reality.rs`: примитивы протокола, тесты на векторах из Go-криптографии Xray-core
      - форк rustls ([maxeliseyev/rustls](https://github.com/maxeliseyev/rustls), ветка `reality-0.23`) с хуком `ClientConfig::session_id_hook`
      - `src/reality_tls.rs`: X25519 key share, session-id hook, HMAC-проверка сертификата, `RealityConnector`
-     - `runtime.reality_engine = auto | native | xray`, `vproxy --probe`
+     - `runtime.reality_engine = auto | native | xray`, `ratatosk --probe`
      - проверено сквозным тестом против локального xray-core 26.7.28 REALITY-сервера
      - попутно исправлен deadlock: VLESS response header читается лениво (`vless::VlessStream`), как его шлёт Xray
      - **Комментарий:** решение принято осознанно — проект должен быть своим ядром, а не конфиг-генератором для xray-core.

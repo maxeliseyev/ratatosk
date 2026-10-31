@@ -1,7 +1,7 @@
 //! A local Unix-socket admin surface: newline-delimited JSON [`Snapshot`]s,
 //! one per second to each reader. Local only, no auth — it exposes counts, not
 //! secrets, and is meant to be read from the same host (e.g. `docker compose
-//! exec`). `vproxy-server --stats` and `--tui` are its clients.
+//! exec`). `ratatosk-server --stats` and `--tui` are its clients.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -14,7 +14,7 @@ use tokio::net::{UnixListener, UnixStream};
 use crate::stats::{Snapshot, Stats};
 
 /// Where the server serves, and the clients look, unless overridden.
-pub const DEFAULT_SOCKET: &str = "/run/vproxy-server.sock";
+pub const DEFAULT_SOCKET: &str = "/run/ratatosk-server.sock";
 
 /// Serve snapshots on `path` until the process ends. Replaces a stale socket
 /// file left by a previous run.

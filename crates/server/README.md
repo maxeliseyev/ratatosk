@@ -1,6 +1,6 @@
-# vproxy-server
+# ratatosk-server
 
-Сервер h3-транспорта vproxy (QUIC, свой протокол): план и причины в [docs/h3-transport-plan.md](../../docs/h3-transport-plan.md). Прототип, стадия 2.
+Сервер h3-транспорта ratatosk (QUIC, свой протокол): план и причины в [docs/h3-transport-plan.md](../../docs/h3-transport-plan.md). Прототип, стадия 2.
 
 Что умеет сейчас: QUIC v1 + TLS 1.3 с сертификатом домена из файлов, ALPN `h3`, аутентификация токеном от uuid, привязанным к TLS-сессии, TCP-цели как потоки одного соединения, UDP как QUIC DATAGRAM (RFC 9221) в том же соединении (пакет больше лимита датаграммы пути идёт фрагментами, до 8; свой UDP-сокет на каждую сессию клиента, до 256 на соединение, закрытие после 2 минут тишины), отказ в доступе к приватным адресам. Обычные HTTP/3-клиенты получают контент внешнего HTTP-backend. ACME внутри сервера пока нет: сертификат получает Caddy либо оператор передаёт готовые файлы.
 
@@ -17,11 +17,11 @@ site_backend = "http://caddy:8080"
 ```
 
 ```sh
-cargo build --release -p vproxy-server
-target/release/vproxy-server -c server.toml        # -v для подробного лога
+cargo build --release -p ratatosk-server
+target/release/ratatosk-server -c server.toml        # -v для подробного лога
 ```
 
-Ссылка для клиента: `h3://<uuid>@example.com:8445?sni=example.com#name` — подходит для `vproxy`, файла ссылок и подписок.
+Ссылка для клиента: `h3://<uuid>@example.com:8445?sni=example.com#name` — подходит для `ratatosk`, файла ссылок и подписок.
 
 `site_backend` — HTTP origin без пути, логина и пароля. Получение страницы
 не требует UUID. Поддерживаются GET/HEAD, пересылка Range и условных заголовков,

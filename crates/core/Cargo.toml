@@ -1,8 +1,8 @@
 [package]
-name = "vproxy-core"
+name = "ratatosk-core"
 version.workspace = true
 edition.workspace = true
-description = "Shared networking core for vproxy clients and server"
+description = "Shared networking core for ratatosk clients and server"
 publish = false
 
 [dependencies]
