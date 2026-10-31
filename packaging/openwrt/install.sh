@@ -20,7 +20,7 @@
 # SOCKS_PORT (default 1080), REPO (GitHub owner/repo of the release).
 set -eu
 
-RATATOSK_VERSION="${RATATOSK_VERSION:-${VPROXY_VERSION:-0.18.6}}"
+RATATOSK_VERSION="${RATATOSK_VERSION:-${VPROXY_VERSION:-0.19.0}}"
 SOCKS_PORT="${SOCKS_PORT:-1080}"
 REPO="${REPO:-maxeliseyev/ratatosk}"
 

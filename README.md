@@ -25,7 +25,7 @@
 curl -fsSL https://raw.githubusercontent.com/maxeliseyev/ratatosk/main/install.sh | sh
 ```
 
-Скрипт определяет платформу, проверяет sha256 и ставит `ratatosk` в `/usr/local/bin` (или `~/.local/bin`). Переменные: `RATATOSK_VERSION=v0.18.6`, `RATATOSK_PREFIX=~/.local/bin`.
+Скрипт определяет платформу, проверяет sha256 и ставит `ratatosk` в `/usr/local/bin` (или `~/.local/bin`). Переменные: `RATATOSK_VERSION=v0.19.0`, `RATATOSK_PREFIX=~/.local/bin`.
 
 Docker (образ `ghcr.io/maxeliseyev/ratatosk`, linux/amd64 и linux/arm64, слушает `0.0.0.0:1080` внутри контейнера):
 
