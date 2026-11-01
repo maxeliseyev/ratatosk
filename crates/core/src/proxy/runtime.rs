@@ -462,9 +462,14 @@ impl ProxyClient {
         }
     }
 
-    /// The network under us changed: an h3 connection moves to the new path
-    /// (other transports reconnect per session anyway).
+    /// The network under us changed (Wi-Fi↔LTE, say). h3 moves to the new
+    /// path; multiplexed TCP connections are retired so the next session
+    /// dials fresh instead of queueing into a dead socket. Plain per-session
+    /// TCP reconnects on its own: each session dials independently.
     pub async fn network_changed(&self) {
+        if let Some(mux) = &self.mux {
+            mux.invalidate();
+        }
         let client = self
             .h3
             .lock()

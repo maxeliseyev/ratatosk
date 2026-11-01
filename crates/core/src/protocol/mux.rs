@@ -521,6 +521,26 @@ impl MuxManager {
             .filter(|c| !c.is_closed())
             .count()
     }
+
+    /// The network under us changed: connections dialed over the old path are
+    /// dead or dying. Retire them all so new sessions dial a fresh connection
+    /// instead of queueing into a dead socket, and close the idle ones right
+    /// away (their driver and socket are freed immediately). Connections with
+    /// live sessions stay until those sessions end, as on a server switch.
+    pub fn invalidate(&self) {
+        let mut connections = self.connections.lock().expect("mux connections poisoned");
+        for c in connections.iter() {
+            c.retired.store(true, Ordering::Release);
+        }
+        connections.retain(|c| {
+            if c.active() == 0 {
+                c.close();
+                false
+            } else {
+                true
+            }
+        });
+    }
 }
 
 /// One session: `AsyncRead`/`AsyncWrite` over frames of a shared connection.
@@ -725,5 +745,50 @@ mod tests {
         let f = encode_frame(1, STATUS_NEW, 0, Some((&v6, 80)), None);
         assert_eq!(f[9], 3);
         assert_eq!(f.len(), 10 + 16);
+    }
+
+    /// `invalidate` retires live connections so the next `open` dials fresh
+    /// instead of queueing a session into a socket dialed over the old path.
+    #[tokio::test]
+    async fn invalidate_dials_a_fresh_connection() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Mutex};
+        use std::time::Duration;
+
+        let mux = MuxManager::new(8);
+        let dials = Arc::new(AtomicUsize::new(0));
+        // Keep the server side of each duplex open so the driver sees neither
+        // EOF nor the 16 s idle close within this test.
+        let peers: Arc<Mutex<Vec<tokio::io::DuplexStream>>> = Arc::new(Mutex::new(Vec::new()));
+        let key = "srv";
+        let target = (Address::Domain("a.example".to_string()), 80);
+
+        let dial = {
+            let dials = Arc::clone(&dials);
+            let peers = Arc::clone(&peers);
+            move || {
+                let dials = Arc::clone(&dials);
+                let peers = Arc::clone(&peers);
+                async move {
+                    dials.fetch_add(1, Ordering::SeqCst);
+                    let (client, server) = tokio::io::duplex(64);
+                    peers.lock().unwrap().push(server);
+                    Ok(client)
+                }
+            }
+        };
+
+        let first = mux.open(key, target.clone(), dial());
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert_eq!(dials.load(Ordering::SeqCst), 1);
+
+        mux.invalidate();
+
+        let second = mux.open(key, target.clone(), dial());
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert_eq!(dials.load(Ordering::SeqCst), 2);
+
+        drop((first, second));
+        drop(peers);
     }
 }
