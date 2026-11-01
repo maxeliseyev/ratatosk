@@ -1,3 +1,4 @@
+use crate::proxy::runtime::tune_tcp;
 use anyhow::{Context, Result};
 use rustls::pki_types::ServerName;
 use std::pin::Pin;
@@ -89,6 +90,7 @@ impl TlsClient {
         addr: impl tokio::net::ToSocketAddrs,
     ) -> Result<tokio_rustls::client::TlsStream<TcpStream>> {
         let tcp = TcpStream::connect(addr).await?;
+        tune_tcp(&tcp);
         let domain = ServerName::try_from(self.server_name.as_str())
             .with_context(|| format!("Invalid TLS server name: {}", self.server_name))?
             .to_owned();

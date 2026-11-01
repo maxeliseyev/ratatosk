@@ -16,6 +16,7 @@
 
 use crate::config::{ServerConfig, TransportSecurity};
 use crate::protocol::reality::tls::RealityConnector;
+use crate::proxy::runtime::tune_tcp;
 use crate::transport::tls::TlsClient;
 use anyhow::{bail, Context, Result};
 use bytes::Bytes;
@@ -356,6 +357,7 @@ async fn dial(server: &ServerConfig, config: &XhttpConfig) -> Result<HttpConn> {
         TransportSecurity::Reality => {
             let client = crate::proxy::runtime::reality_client(server)?;
             let tcp = TcpStream::connect(addr).await?;
+            tune_tcp(&tcp);
             let stream = RealityConnector::new(client)
                 .with_fingerprint(server.fingerprint_kind())
                 .connect(tcp)
@@ -373,7 +375,11 @@ async fn dial(server: &ServerConfig, config: &XhttpConfig) -> Result<HttpConn> {
             let h2 = stream.get_ref().1.alpn_protocol() == Some(b"h2");
             (Box::new(stream), h2)
         }
-        TransportSecurity::None => (Box::new(TcpStream::connect(addr).await?), false),
+        TransportSecurity::None => {
+            let tcp = TcpStream::connect(addr).await?;
+            tune_tcp(&tcp);
+            (Box::new(tcp), false)
+        }
     };
     let _ = config;
     if h2 {

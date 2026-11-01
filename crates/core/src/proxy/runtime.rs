@@ -18,7 +18,7 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::future::Future;
 use std::net::IpAddr;
-use std::os::unix::io::AsRawFd;
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::Poll;
@@ -32,6 +32,90 @@ use tracing::{debug, error, info, warn};
 
 /// A VLESS session to the configured server, ready for relaying.
 pub type RemoteStream = VlessStream<MaybeTlsStream<TcpStream>>;
+
+/// TCP keepalive timing: first probe after this much idle, then every
+/// interval, giving up after count probes. Detects a dead path (Wi-Fi↔LTE
+/// switch, NAT rebind) in ~50 s instead of the OS default of hours.
+const TCP_KEEPALIVE_IDLE_SECS: libc::c_int = 30;
+const TCP_KEEPALIVE_INTERVAL_SECS: libc::c_int = 10;
+const TCP_KEEPALIVE_COUNT: libc::c_int = 3;
+
+/// Disable Nagle and enable TCP keepalive on a freshly connected relay or
+/// direct socket. Nagle + delayed ACK costs tens of milliseconds per small
+/// request on a relay, and a VPN keeps connections open long enough for the
+/// default keepalive to be useless on a phone.
+pub(crate) fn tune_tcp(stream: &TcpStream) {
+    let _ = stream.set_nodelay(true);
+    set_tcp_keepalive(stream.as_raw_fd());
+}
+
+fn set_tcp_keepalive(fd: RawFd) {
+    unsafe {
+        // tokio::TcpStream has set_nodelay but not set_keepalive; the socket
+        // option is what SO_KEEPALIVE maps to anyway.
+        set_sockopt_int(fd, libc::SOL_SOCKET, libc::SO_KEEPALIVE, 1);
+    }
+    set_tcp_keepalive_timing(fd);
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn set_tcp_keepalive_timing(fd: RawFd) {
+    unsafe {
+        set_sockopt_int(
+            fd,
+            libc::IPPROTO_TCP,
+            libc::TCP_KEEPIDLE,
+            TCP_KEEPALIVE_IDLE_SECS,
+        );
+        set_sockopt_int(
+            fd,
+            libc::IPPROTO_TCP,
+            libc::TCP_KEEPINTVL,
+            TCP_KEEPALIVE_INTERVAL_SECS,
+        );
+        set_sockopt_int(
+            fd,
+            libc::IPPROTO_TCP,
+            libc::TCP_KEEPCNT,
+            TCP_KEEPALIVE_COUNT,
+        );
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn set_tcp_keepalive_timing(fd: RawFd) {
+    unsafe {
+        // macOS spells TCP_KEEPIDLE as TCP_KEEPALIVE.
+        set_sockopt_int(
+            fd,
+            libc::IPPROTO_TCP,
+            libc::TCP_KEEPALIVE,
+            TCP_KEEPALIVE_IDLE_SECS,
+        );
+        set_sockopt_int(
+            fd,
+            libc::IPPROTO_TCP,
+            libc::TCP_KEEPINTVL,
+            TCP_KEEPALIVE_INTERVAL_SECS,
+        );
+        set_sockopt_int(
+            fd,
+            libc::IPPROTO_TCP,
+            libc::TCP_KEEPCNT,
+            TCP_KEEPALIVE_COUNT,
+        );
+    }
+}
+
+unsafe fn set_sockopt_int(fd: RawFd, level: libc::c_int, opt: libc::c_int, value: libc::c_int) {
+    let _ = libc::setsockopt(
+        fd,
+        level,
+        opt,
+        &value as *const libc::c_int as *const libc::c_void,
+        std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+    );
+}
 
 /// Where a TCP connection ended up after routing.
 pub enum OutboundStream {
@@ -319,7 +403,10 @@ impl ProxyClient {
                 }
             }
             match timeout(connect_timeout, socket.connect(addr)).await {
-                Ok(Ok(stream)) => return Ok(stream),
+                Ok(Ok(stream)) => {
+                    tune_tcp(&stream);
+                    return Ok(stream);
+                }
                 Ok(Err(e)) => last = Some(e.into()),
                 Err(_) => last = Some(anyhow::anyhow!("Direct connection timeout")),
             }
@@ -1579,6 +1666,7 @@ async fn connect_remote(server: &ServerConfig) -> Result<MaybeTlsStream<TcpStrea
         (Transport::Tcp, TransportSecurity::Reality) => {
             let client = reality_client(server)?;
             let tcp = TcpStream::connect(addr).await?;
+            tune_tcp(&tcp);
             let stream = RealityConnector::new(client)
                 .with_fingerprint(server.fingerprint_kind())
                 .connect(tcp)
@@ -1586,7 +1674,9 @@ async fn connect_remote(server: &ServerConfig) -> Result<MaybeTlsStream<TcpStrea
             Ok(MaybeTlsStream::Reality(stream))
         }
         (Transport::Tcp, TransportSecurity::None) => {
-            Ok(MaybeTlsStream::Plain(TcpStream::connect(addr).await?))
+            let tcp = TcpStream::connect(addr).await?;
+            tune_tcp(&tcp);
+            Ok(MaybeTlsStream::Plain(tcp))
         }
         (Transport::Ws, TransportSecurity::Tls) => {
             let tls =
@@ -1597,7 +1687,9 @@ async fn connect_remote(server: &ServerConfig) -> Result<MaybeTlsStream<TcpStrea
             Ok(MaybeTlsStream::Ws(ws))
         }
         (Transport::Ws, TransportSecurity::None) => {
-            let inner = WsInner::Plain(TcpStream::connect(addr).await?);
+            let tcp = TcpStream::connect(addr).await?;
+            tune_tcp(&tcp);
+            let inner = WsInner::Plain(tcp);
             let ws = WsStream::connect(inner, server.ws_host(), server.ws_path()).await?;
             Ok(MaybeTlsStream::Ws(ws))
         }
