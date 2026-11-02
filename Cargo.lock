@@ -2638,7 +2638,7 @@ dependencies = [
 [[package]]
 name = "rustls"
 version = "0.23.46"
-source = "git+https://github.com/maxeliseyev/rustls.git?rev=7df70d14#7df70d1411043716055808cff82030dfadf00c56"
+source = "git+https://github.com/maxeliseyev/rustls.git?rev=b49ce79c#b49ce79c79c48c3934281bb4254e61afff8546cb"
 dependencies = [
  "aws-lc-rs",
  "brotli",

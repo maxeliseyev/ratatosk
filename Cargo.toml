@@ -11,7 +11,7 @@ edition = "2021"
 # Ratatosk fork of rustls 0.23: adds ClientConfig::session_id_hook (REALITY) and
 # ClientConfig::client_hello_rewriter (Chrome TLS fingerprint).
 # Branch reality-0.23, pinned to the commit that was tested.
-rustls = { git = "https://github.com/maxeliseyev/rustls.git", rev = "7df70d14" }
+rustls = { git = "https://github.com/maxeliseyev/rustls.git", rev = "b49ce79c" }
 
 # The iOS static library (scripts/build-xcframework.sh): smaller and a bit
 # faster than plain release, without slowing down desktop release builds.
