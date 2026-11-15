@@ -1,0 +1,28 @@
+[DEFAULT]
+# An hour is long enough to make repeated probing pointless; a wrong password
+# or a scan is not worth more. Localhost is never banned.
+bantime = 1h
+findtime = 10m
+maxretry = 4
+
+[sshd]
+enabled = true
+backend = systemd
+journalmatch = _SYSTEMD_UNIT=ssh.service + _COMM=sshd
+# Key-only SSH (verified in hardening.sh) but the connection attempts still
+# cost packets; the Ubuntu default jail already works this way, these values
+# just make it bite sooner.
+maxretry = 4
+findtime = 10m
+
+# Scanning the site: 40 client errors in 10 minutes is not a human and not a
+# crawler. Banned in the forward hook, because the containers are reached by
+# DNAT (see action.d/nftables-forward.conf).
+[caddy-scan]
+enabled = true
+filter = caddy-scan
+action = nftables-forward[name=caddy-scan]
+logpath = /var/lib/docker/volumes/citylivecam_caddy_data/_data/access.log
+maxretry = 40
+findtime = 10m
+bantime = 1h

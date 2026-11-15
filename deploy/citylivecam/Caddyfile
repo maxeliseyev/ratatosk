@@ -1,0 +1,15 @@
+{
+	acme_ca https://acme-v02.api.letsencrypt.org/directory
+}
+
+# DOMAIN comes from .env through docker compose; the certificate lands in the
+# caddy_data volume, where ratatosk-server reads it too.
+{$DOMAIN} {
+	reverse_proxy citycam:8080
+	log {
+		output file /data/access.log {
+			roll_size 50mb
+			roll_keep 5
+		}
+	}
+}

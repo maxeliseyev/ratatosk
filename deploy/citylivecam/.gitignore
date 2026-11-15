@@ -1,0 +1,6 @@
+# Host-specific files of this stand: .env holds the domain and the image tag,
+# accounts.tsv the accounts, server.toml is generated from them.
+.env
+accounts.tsv
+server.toml
+*.bin

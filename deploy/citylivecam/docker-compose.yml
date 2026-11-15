@@ -1,0 +1,74 @@
+# Productive h3 stand: Caddy serves the domain over HTTP/2 and HTTP/3 on
+# 443/tcp+udp, ratatosk-server takes 443/udp for its own QUIC transport and
+# hands ordinary HTTP/3 requests to the site, citycam is the site itself.
+#
+# Two services share the public 443/udp:
+#   - caddy           → HTTP/3 for browsers (Alt-Svc), TCP 80/443
+#   - ratatosk-server → its own protocol, with `site_backend` for everyone else
+# Both read the same certificate from the caddy_data volume.
+#
+#   cp .env.example .env   # DOMAIN=..., RATATOSK_SERVER_IMAGE=...
+#   bash setup.sh example.com && docker compose up -d
+#
+# Limits below are what a 1 GiB VPS needs to survive a bad day: a leaked or
+# flooded service is killed at its own limit instead of the whole host.
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:?set DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - citycam
+    mem_limit: 128m
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  citycam:
+    image: ghcr.io/maxeliseyev/citycam:latest
+    restart: unless-stopped
+    mem_limit: 128m
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  ratatosk-server:
+    image: ${RATATOSK_SERVER_IMAGE:-ghcr.io/maxeliseyev/ratatosk-server:latest}
+    restart: unless-stopped
+    command: -c /etc/ratatosk-server/server.toml
+    ports:
+      - "443:443/udp"
+    volumes:
+      - ./server.toml:/etc/ratatosk-server/server.toml:ro
+      - caddy_data:/data:ro
+    depends_on:
+      - caddy
+    mem_limit: 128m
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  caddy_data:
+  caddy_config:
