@@ -12,6 +12,14 @@ H="$DIR/hardening"
 
 say() { printf '\n== %s\n' "$*"; }
 
+say "modules: nf_conntrack before sysctl"
+# net.netfilter.nf_conntrack_max only exists once the module is loaded.
+# systemd-sysctl runs after systemd-modules-load, so loading it by name here
+# is what makes the conntrack limit survive a reboot (Docker loads it later,
+# too late for /etc/sysctl.d).
+echo nf_conntrack >/etc/modules-load.d/ratatosk.conf
+modprobe nf_conntrack 2>/dev/null || true
+
 say "sysctl: QUIC buffers, backlogs, conntrack table"
 install -m 0644 "$H/sysctl.conf" /etc/sysctl.d/99-ratatosk.conf
 # nf_conntrack_max lives in the netfilter module; if nothing loaded it yet,

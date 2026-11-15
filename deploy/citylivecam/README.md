@@ -141,7 +141,7 @@ curl -x socks5h://127.0.0.1:1080 https://ifconfig.me
 2. **Docker** (`docker-compose.yml`): `mem_limit` 128 МБ на сервис — утёкший
    или зафлуженный процесс убивается сам, хост не уходит в OOM; ротация логов
    10 МБ × 3, иначе json-лог растёт до заполнения диска.
-3. **Ядро** (`hardening/sysctl.conf`): буферы сокетов под QUIC (8 МБ),
+3. **Ядро** (`hardening/sysctl.conf`, модуль `nf_conntrack` ставится в `modules-load.d`: без него `nf_conntrack_max` на загрузке игнорируется): буферы сокетов под QUIC (8 МБ),
    `netdev_max_backlog` и `somaxconn` под всплески рукопожатий,
    `nf_conntrack_max` 32768 — при 7168 записях флуд с чужих адресов выбивает
    conntrack, и после этого дропается вообще всё, включая легитимных клиентов.
