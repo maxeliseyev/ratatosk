@@ -2274,7 +2274,7 @@ dependencies = [
 
 [[package]]
 name = "ratatosk"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "anyhow",
  "crossterm",
@@ -2295,7 +2295,7 @@ dependencies = [
 
 [[package]]
 name = "ratatosk-core"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2340,7 +2340,7 @@ dependencies = [
 
 [[package]]
 name = "ratatosk-ffi"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "anyhow",
  "etherparse",
@@ -2353,7 +2353,7 @@ dependencies = [
 
 [[package]]
 name = "ratatosk-server"
-version = "0.20.1"
+version = "0.20.2"
 dependencies = [
  "anyhow",
  "bytes",
