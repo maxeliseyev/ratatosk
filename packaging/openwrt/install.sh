@@ -8,12 +8,15 @@
 #
 # ratatosk speaks our transport and offers a local SOCKS5 inbound; sing-box is the
 # TUN + routing + DNS layer (sing-box's own DoH runs over the proxy, since raw
-# UDP DNS over SOCKS is unreliable). Requires an aarch64 or x86_64 OpenWrt
+# UDP DNS over SOCKS is unreliable). The setup is fail-closed: LAN clients have
+# no direct WAN path, and DNS is not allowed to fall back to the ISP resolvers.
+# Requires an aarch64 or x86_64 OpenWrt
 # device (the aws-lc-rs crypto core has no MIPS/ARMv7 build) with ~20 MB free on
 # /overlay and the default OpenWrt package feeds reachable.
 #
 # Usage, on the router (or over ssh):
 #   sh install.sh 'h3://<uuid>@<host>:443?sni=<host>#label'
+#   sh install.sh 'vless://<uuid>@<host>:443?security=reality&...#label'
 # Re-running is safe (idempotent); it reconfigures in place.
 #
 # Env overrides: RATATOSK_VERSION (default below), SERVER_IP (skip DNS lookup),
@@ -25,7 +28,7 @@ SOCKS_PORT="${SOCKS_PORT:-1080}"
 REPO="${REPO:-maxeliseyev/ratatosk}"
 
 LINK="${1:-$(cat /etc/ratatosk/link 2>/dev/null || cat /etc/vproxy/link 2>/dev/null || true)}"
-[ -n "$LINK" ] || { echo "usage: sh install.sh 'h3://<uuid>@<host>:443?sni=<host>#label'" >&2; exit 1; }
+[ -n "$LINK" ] || { echo "usage: sh install.sh 'h3://<uuid>@<host>:443?sni=<host>#label' (or a vless:// REALITY link)" >&2; exit 1; }
 
 # --- parse the exit host out of the link ------------------------------------
 HOST=$(printf '%s' "$LINK" | sed -E 's#^[a-z0-9]+://[^@]*@([^:/?#]+).*#\1#')
@@ -140,7 +143,7 @@ cat > /etc/sing-box/config.json <<CFG
       "address": ["172.19.0.1/30"],
       "auto_route": true,
       "strict_route": true,
-      "stack": "gvisor"
+      "stack": "system"
     }
   ],
   "outbounds": [
@@ -186,7 +189,41 @@ uci -q delete firewall.lan_proxy || true
 uci set firewall.lan_proxy='forwarding'
 uci set firewall.lan_proxy.src='lan'
 uci set firewall.lan_proxy.dest='proxy'
+
+# Fail closed: remove the stock lan -> wan forwarding. Without it, if sing-box
+# crashes or is stopped, LAN packets still route through the WAN default and
+# leak to the ISP. With only lan -> proxy, they hit fw4's drop policy instead.
+i=0
+while uci -q get "firewall.@forwarding[$i]" >/dev/null; do
+  if [ "$(uci -q get "firewall.@forwarding[$i].src")" = lan ] &&
+     [ "$(uci -q get "firewall.@forwarding[$i].dest")" = wan ]; then
+    uci -q delete "firewall.@forwarding[$i]"
+  else
+    i=$((i + 1))
+  fi
+done
+
+# dnsmasq runs on the router, so its queries take the output path, not the
+# forwarded one. Block output to WAN port 53: while the tunnel is up the query
+# is routed into tun0 and hijacked by sing-box; while it is down it is rejected
+# instead of revealing every name to the ISP resolver.
+uci -q delete firewall.block_dns_leak || true
+uci set firewall.block_dns_leak='rule'
+uci set firewall.block_dns_leak.name='Block-DNS-leak-to-WAN'
+uci set firewall.block_dns_leak.dest='wan'
+uci set firewall.block_dns_leak.proto='tcp udp'
+uci set firewall.block_dns_leak.dest_port='53'
+uci set firewall.block_dns_leak.target='REJECT'
 uci commit firewall
+
+# Send LAN DNS through the tunnel as well. dnsmasq asks a public resolver;
+# sing-box's route table sends the router's output into tun0, where the DNS
+# hijack answers it. noresolv stops dnsmasq from using the ISP servers that
+# DHCP put in /tmp/resolv.conf.d/resolv.conf.auto.
+uci set dhcp.@dnsmasq[0].noresolv='1'
+uci -q delete dhcp.@dnsmasq[0].server || true
+uci add_list dhcp.@dnsmasq[0].server='1.1.1.1'
+uci commit dhcp
 
 # At boot fw4 starts before sing-box creates tun0, so the zone binds to nothing
 # until a reload. Reload fw4 whenever tun0 appears.
@@ -201,6 +238,7 @@ chmod 0755 /etc/hotplug.d/net/99-proxy-fw
 echo ">> starting services"
 /etc/init.d/ratatosk restart
 sleep 2
+/etc/init.d/dnsmasq restart
 /etc/init.d/sing-box restart
 sleep 6
 fw4 reload >/dev/null 2>&1 || true   # bind the proxy zone now that tun0 exists
