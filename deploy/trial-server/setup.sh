@@ -49,6 +49,10 @@ cert = "$CERTS/$DOMAIN.crt"
 key = "$CERTS/$DOMAIN.key"
 users = ["$H3_UUID"]
 site_backend = "http://caddy:8080"
+# Защита от исчерпания ресурсов (по умолчанию: 1024 / 1024 / 16).
+# max_connections = 1024          # живых соединений суммарно
+# max_incoming = 1024             # незавершённых рукопожатий в очереди
+# max_connections_per_ip = 16     # соединений с одного IP
 TOML
 
 cat <<MSG

@@ -5,7 +5,7 @@
 use ratatosk_core::h3::H3Client;
 use ratatosk_core::protocol::vless::Address;
 use ratatosk_core::{ActiveServer, Config, ProxyClient, VlessUrl};
-use ratatosk_server::{Accounts, Server};
+use ratatosk_server::{Accounts, Limits, Server};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -28,16 +28,21 @@ struct Stand {
 }
 
 async fn stand(allow_private: bool) -> Stand {
+    stand_with(allow_private, Limits::default()).await
+}
+
+async fn stand_with(allow_private: bool, limits: Limits) -> Stand {
     let generated = rcgen::generate_simple_self_signed(vec![NAME.to_string()]).unwrap();
     let cert = CertificateDer::from(generated.cert.der().to_vec());
     let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(generated.key_pair.serialize_der()));
     let admin = std::env::temp_dir().join(format!("ratatosk-e2e-{}.sock", Uuid::new_v4()));
-    let server = Server::bind(
+    let server = Server::bind_with_limits(
         "127.0.0.1:0".parse().unwrap(),
         vec![cert.clone()],
         key,
         vec![ALICE],
         allow_private,
+        limits,
     )
     .unwrap()
     .with_admin(admin.clone());
@@ -102,6 +107,140 @@ fn as_target(addr: SocketAddr) -> (Address, u16) {
         unreachable!()
     };
     (Address::Ipv4(*addr.ip()), addr.port())
+}
+
+/// A zero in any of the caps would silently turn one of them off, so it is
+/// refused at construction instead.
+#[test]
+fn zero_limits_are_rejected() {
+    let generated = rcgen::generate_simple_self_signed(vec![NAME.to_string()]).unwrap();
+    let cert = CertificateDer::from(generated.cert.der().to_vec());
+    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(generated.key_pair.serialize_der()));
+    let limits = [
+        Limits {
+            max_connections: 0,
+            ..Limits::default()
+        },
+        Limits {
+            max_incoming: 0,
+            ..Limits::default()
+        },
+        Limits {
+            max_connections_per_ip: 0,
+            ..Limits::default()
+        },
+    ];
+    for limits in limits {
+        let result = Server::bind_with_limits(
+            "127.0.0.1:0".parse().unwrap(),
+            vec![cert.clone()],
+            key.clone_key(),
+            vec![ALICE],
+            true,
+            limits,
+        );
+        let err = match result {
+            Ok(_) => panic!("a zero limit must be refused"),
+            Err(e) => e,
+        };
+        assert!(err.to_string().contains("positive"), "{err}");
+    }
+}
+
+/// One connection per address at a time: the second client is refused while
+/// the first is up, and gets in once it goes away (the slot is released).
+#[tokio::test]
+async fn per_ip_connection_limit_refuses_extra() {
+    let limits = Limits {
+        max_connections: 4,
+        max_incoming: 4,
+        max_connections_per_ip: 1,
+    };
+    let stand = stand_with(true, limits).await;
+    let (address, port) = echo_target(&stand);
+    let mut buf = [0u8; 2];
+
+    let first = client(&stand, ALICE);
+    let mut stream = first.open_tcp(&address, port).await.unwrap();
+    stream.write_all(b"hi").await.unwrap();
+    stream.read_exact(&mut buf).await.unwrap();
+    assert_eq!(&buf, b"hi");
+
+    let second = client(&stand, ALICE);
+    let refused = timeout(Duration::from_secs(10), second.open_tcp(&address, port)).await;
+    assert!(
+        !matches!(refused, Ok(Ok(_))),
+        "a second connection from the same IP must be refused"
+    );
+
+    first
+        .connection()
+        .await
+        .unwrap()
+        .close(0u32.into(), b"done");
+    let mut admitted = false;
+    for _ in 0..40 {
+        match timeout(Duration::from_secs(2), second.open_tcp(&address, port)).await {
+            Ok(Ok(mut stream)) => {
+                stream.write_all(b"ok").await.unwrap();
+                stream.read_exact(&mut buf).await.unwrap();
+                assert_eq!(&buf, b"ok");
+                admitted = true;
+                break;
+            }
+            _ => tokio::time::sleep(Duration::from_millis(100)).await,
+        }
+    }
+    assert!(admitted, "the per-IP slot was not released on close");
+}
+
+/// The total cap holds even when the peers are not from one address: here
+/// the client retries after the live connection is closed, so the freed
+/// permit is reused instead of the endpoint staying stuck.
+#[tokio::test]
+async fn total_connection_limit_reuses_a_freed_slot() {
+    let limits = Limits {
+        max_connections: 1,
+        max_incoming: 4,
+        max_connections_per_ip: 4,
+    };
+    let stand = stand_with(true, limits).await;
+    let (address, port) = echo_target(&stand);
+    let mut buf = [0u8; 2];
+
+    let first = client(&stand, ALICE);
+    let mut stream = first.open_tcp(&address, port).await.unwrap();
+    stream.write_all(b"a").await.unwrap();
+    stream.read_exact(&mut buf[..1]).await.unwrap();
+
+    let second = client(&stand, ALICE);
+    assert!(
+        !matches!(
+            timeout(Duration::from_secs(5), second.open_tcp(&address, port)).await,
+            Ok(Ok(_))
+        ),
+        "the total connection cap must hold while the slot is taken"
+    );
+
+    first
+        .connection()
+        .await
+        .unwrap()
+        .close(0u32.into(), b"done");
+    let mut admitted = false;
+    for _ in 0..40 {
+        match timeout(Duration::from_secs(2), second.open_tcp(&address, port)).await {
+            Ok(Ok(mut stream)) => {
+                stream.write_all(b"b").await.unwrap();
+                stream.read_exact(&mut buf[..1]).await.unwrap();
+                assert_eq!(&buf[..1], b"b");
+                admitted = true;
+                break;
+            }
+            _ => tokio::time::sleep(Duration::from_millis(100)).await,
+        }
+    }
+    assert!(admitted, "the connection permit was not released on close");
 }
 
 #[tokio::test]

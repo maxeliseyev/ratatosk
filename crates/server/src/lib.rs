@@ -25,9 +25,10 @@ use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tokio::net::{TcpStream, UdpSocket};
+use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
@@ -58,6 +59,22 @@ const MAX_UDP_SESSIONS: usize = 256;
 /// Same as the client's, so datagrams fit from the first packet.
 const INITIAL_MTU: u16 = ratatosk_core::h3::client::INITIAL_MTU;
 
+/// Cap on live connections (authenticated or not); new handshakes wait for a
+/// free slot. Default for [`Settings::max_connections`].
+const MAX_CONNECTIONS_DEFAULT: usize = 1024;
+/// Pending, not-yet-accepted handshakes quinn buffers before refusing.
+const MAX_INCOMING_DEFAULT: usize = 1024;
+/// Live connections from one IP; the excess is refused without a handshake.
+const MAX_CONNECTIONS_PER_IP_DEFAULT: usize = 16;
+/// Per-connection receive window: bounds how much one peer can make the
+/// server buffer before flow control blocks it. Much smaller than quinn's
+/// default (`VarInt::MAX`), which lets one client pin a lot of memory.
+const RECEIVE_WINDOW: u64 = 4 * 1024 * 1024;
+/// Per-stream receive window; quinn defaults to ~1.25 MiB.
+const STREAM_RECEIVE_WINDOW: u64 = 256 * 1024;
+/// Concurrent bidirectional (TCP relay) streams per connection.
+const MAX_BIDI_STREAMS: u32 = 64;
+
 /// `server.toml`:
 ///
 /// ```toml
@@ -65,6 +82,9 @@ const INITIAL_MTU: u16 = ratatosk_core::h3::client::INITIAL_MTU;
 /// cert = "/etc/letsencrypt/live/example.com/fullchain.pem"
 /// key = "/etc/letsencrypt/live/example.com/privkey.pem"
 /// users = ["00000000-0000-0000-0000-000000000000"]
+/// # max_connections = 1024          # cap on live connections (any state)
+/// # max_incoming = 1024             # pending handshakes quinn buffers
+/// # max_connections_per_ip = 16     # live connections per source IP
 /// ```
 #[derive(Debug, Deserialize)]
 pub struct Settings {
@@ -84,6 +104,18 @@ pub struct Settings {
     /// Defaults to [`admin::DEFAULT_SOCKET`]; set to "" to turn it off.
     #[serde(default)]
     pub admin: Option<String>,
+    /// Cap on live connections (authenticated or not). Handshakes wait for a
+    /// free slot; beyond [`max_incoming`](Settings::max_incoming) new ones
+    /// are refused by QUIC.
+    #[serde(default = "default_max_connections")]
+    pub max_connections: usize,
+    /// Pending, not-yet-accepted handshakes quinn buffers before refusing.
+    #[serde(default = "default_max_incoming")]
+    pub max_incoming: usize,
+    /// Live connections from one IP; the excess is refused without a
+    /// handshake. Spoofed sources are already filtered by the Retry check.
+    #[serde(default = "default_max_connections_per_ip")]
+    pub max_connections_per_ip: usize,
 }
 
 impl Settings {
@@ -99,6 +131,46 @@ impl Settings {
     }
 }
 
+/// Resource limits for the QUIC endpoint; see [`Settings`] for semantics.
+#[derive(Debug, Clone, Copy)]
+pub struct Limits {
+    pub max_connections: usize,
+    pub max_incoming: usize,
+    pub max_connections_per_ip: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            max_connections: MAX_CONNECTIONS_DEFAULT,
+            max_incoming: MAX_INCOMING_DEFAULT,
+            max_connections_per_ip: MAX_CONNECTIONS_PER_IP_DEFAULT,
+        }
+    }
+}
+
+impl From<&Settings> for Limits {
+    fn from(s: &Settings) -> Self {
+        Self {
+            max_connections: s.max_connections,
+            max_incoming: s.max_incoming,
+            max_connections_per_ip: s.max_connections_per_ip,
+        }
+    }
+}
+
+fn default_max_connections() -> usize {
+    MAX_CONNECTIONS_DEFAULT
+}
+
+fn default_max_incoming() -> usize {
+    MAX_INCOMING_DEFAULT
+}
+
+fn default_max_connections_per_ip() -> usize {
+    MAX_CONNECTIONS_PER_IP_DEFAULT
+}
+
 pub struct Server {
     endpoint: quinn::Endpoint,
     users: Accounts,
@@ -106,6 +178,8 @@ pub struct Server {
     site: Option<http3::Site>,
     stats: Arc<Stats>,
     admin: Option<PathBuf>,
+    max_connections: usize,
+    max_connections_per_ip: usize,
 }
 
 impl Server {
@@ -115,12 +189,13 @@ impl Server {
             .map_err(|e| anyhow!("{}: {e}", settings.cert.display()))?;
         let key = PrivateKeyDer::from_pem_file(&settings.key)
             .map_err(|e| anyhow!("{}: {e}", settings.key.display()))?;
-        let mut server = Self::bind(
+        let mut server = Self::bind_with_limits(
             settings.listen,
             certs,
             key,
             settings.users.clone(),
             settings.allow_private,
+            Limits::from(settings),
         )?;
         if let Some(backend) = &settings.site_backend {
             server = server.with_site_backend(backend)?;
@@ -141,6 +216,24 @@ impl Server {
         users: Vec<Uuid>,
         allow_private: bool,
     ) -> Result<Self> {
+        Self::bind_with_limits(listen, certs, key, users, allow_private, Limits::default())
+    }
+
+    /// [`bind`] with explicit [`Limits`].
+    pub fn bind_with_limits(
+        listen: SocketAddr,
+        certs: Vec<CertificateDer<'static>>,
+        key: PrivateKeyDer<'static>,
+        users: Vec<Uuid>,
+        allow_private: bool,
+        limits: Limits,
+    ) -> Result<Self> {
+        if limits.max_connections == 0
+            || limits.max_incoming == 0
+            || limits.max_connections_per_ip == 0
+        {
+            bail!("connection limits must be positive");
+        }
         let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
         let mut tls = rustls::ServerConfig::builder_with_provider(provider)
             .with_protocol_versions(&[&rustls::version::TLS13])
@@ -152,9 +245,21 @@ impl Server {
         let crypto = quinn::crypto::rustls::QuicServerConfig::try_from(tls)
             .map_err(|e| anyhow!("QUIC server config: {e}"))?;
         let mut config = quinn::ServerConfig::with_crypto(Arc::new(crypto));
+        config.max_incoming(limits.max_incoming);
         let mut transport = quinn::TransportConfig::default();
         transport
             .max_idle_timeout(Some(IDLE_TIMEOUT.try_into().expect("30 s fits a VarInt")))
+            .max_concurrent_bidi_streams(MAX_BIDI_STREAMS.into())
+            .stream_receive_window(
+                STREAM_RECEIVE_WINDOW
+                    .try_into()
+                    .expect("stream receive window fits a VarInt"),
+            )
+            .receive_window(
+                RECEIVE_WINDOW
+                    .try_into()
+                    .expect("receive window fits a VarInt"),
+            )
             .initial_mtu(INITIAL_MTU);
         config.transport_config(Arc::new(transport));
         let endpoint = quinn::Endpoint::server(config, listen)
@@ -166,6 +271,8 @@ impl Server {
             site: None,
             stats: Arc::new(Stats::new()),
             admin: None,
+            max_connections: limits.max_connections,
+            max_connections_per_ip: limits.max_connections_per_ip,
         })
     }
 
@@ -210,13 +317,41 @@ impl Server {
             allow_private: self.allow_private,
             site: self.site,
             stats,
+            conn_slots: Arc::new(Semaphore::new(self.max_connections)),
+            per_ip: Mutex::new(HashMap::new()),
+            max_connections_per_ip: self.max_connections_per_ip,
         });
         while let Some(incoming) = self.endpoint.accept().await {
+            // A peer must prove it can receive our packets (one Retry
+            // round-trip) before we commit to an expensive handshake. This
+            // turns spoofed-source floods into a cheap stateless reply.
+            if !incoming.remote_address_validated() {
+                if let Err(e) = incoming.retry() {
+                    debug!("retry: {e:#}");
+                }
+                continue;
+            }
+            let ip = incoming.remote_address().ip();
+            if !shared.reserve_ip(ip) {
+                debug!("{ip}: per-IP connection limit reached");
+                incoming.refuse();
+                continue;
+            }
+            let permit = shared
+                .conn_slots
+                .clone()
+                .acquire_owned()
+                .await
+                .expect("connection semaphore is never closed");
             let shared = shared.clone();
             tokio::spawn(async move {
-                let remote = incoming.remote_address();
+                let _ip_guard = IpSlotGuard {
+                    ip,
+                    shared: shared.clone(),
+                };
+                let _permit = permit;
                 if let Err(e) = shared.connection(incoming).await {
-                    debug!("{remote}: {e:#}");
+                    debug!("{ip}: {e:#}");
                 }
             });
         }
@@ -229,9 +364,50 @@ struct Shared {
     allow_private: bool,
     site: Option<http3::Site>,
     stats: Arc<Stats>,
+    /// Permits for live connections; a handshake cannot start without one.
+    conn_slots: Arc<Semaphore>,
+    /// Live connections per remote IP.
+    per_ip: Mutex<HashMap<IpAddr, usize>>,
+    max_connections_per_ip: usize,
+}
+
+/// Releases the per-IP slot when the connection task finishes (success or
+/// not), so a peer cannot pin its whole [`Limits::max_connections_per_ip`]
+/// quota with dead connections.
+struct IpSlotGuard {
+    ip: IpAddr,
+    shared: Arc<Shared>,
+}
+
+impl Drop for IpSlotGuard {
+    fn drop(&mut self) {
+        self.shared.release_ip(self.ip);
+    }
 }
 
 impl Shared {
+    /// Take a per-IP slot or report the limit. Returns `true` when taken;
+    /// the [`IpSlotGuard`] releases it when the connection task ends.
+    fn reserve_ip(&self, ip: IpAddr) -> bool {
+        let mut per_ip = self.per_ip.lock().expect("per-ip lock poisoned");
+        let count = per_ip.entry(ip).or_insert(0);
+        if *count >= self.max_connections_per_ip {
+            return false;
+        }
+        *count += 1;
+        true
+    }
+
+    fn release_ip(&self, ip: IpAddr) {
+        let mut per_ip = self.per_ip.lock().expect("per-ip lock poisoned");
+        if let Some(count) = per_ip.get_mut(&ip) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                per_ip.remove(&ip);
+            }
+        }
+    }
+
     async fn connection(self: Arc<Self>, incoming: quinn::Incoming) -> Result<()> {
         let remote = incoming.remote_address();
         let conn = incoming.await.context("handshake")?;
@@ -524,6 +700,48 @@ fn account_tag(uuid: &Uuid) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn settings(text: &str) -> Settings {
+        toml::from_str(text).expect("settings parse")
+    }
+
+    #[test]
+    fn limits_default_when_absent() {
+        let settings = settings(
+            r#"
+            listen = "0.0.0.0:443"
+            cert = "/c.pem"
+            key = "/k.pem"
+            users = ["00000000-0000-0000-0000-000000000000"]
+            "#,
+        );
+        let limits = Limits::from(&settings);
+        assert_eq!(limits.max_connections, MAX_CONNECTIONS_DEFAULT);
+        assert_eq!(limits.max_incoming, MAX_INCOMING_DEFAULT);
+        assert_eq!(
+            limits.max_connections_per_ip,
+            MAX_CONNECTIONS_PER_IP_DEFAULT
+        );
+    }
+
+    #[test]
+    fn limits_come_from_toml() {
+        let settings = settings(
+            r#"
+            listen = "0.0.0.0:443"
+            cert = "/c.pem"
+            key = "/k.pem"
+            users = ["00000000-0000-0000-0000-000000000000"]
+            max_connections = 32
+            max_incoming = 8
+            max_connections_per_ip = 2
+            "#,
+        );
+        let limits = Limits::from(&settings);
+        assert_eq!(limits.max_connections, 32);
+        assert_eq!(limits.max_incoming, 8);
+        assert_eq!(limits.max_connections_per_ip, 2);
+    }
 
     #[test]
     fn only_internet_addresses_are_public() {
