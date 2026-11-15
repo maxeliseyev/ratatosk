@@ -107,7 +107,7 @@ ratatosk-server` после продления — единственное об
 Тег образа фиксируется в `.env`:
 
 ```
-RATATOSK_SERVER_IMAGE=ghcr.io/maxeliseyev/ratatosk-server:0.20.1
+RATATOSK_SERVER_IMAGE=ghcr.io/maxeliseyev/ratatosk-server:0.20.2
 ```
 
 `latest` удобен, но незаметно меняет поведение стенда: для отладки лучше
