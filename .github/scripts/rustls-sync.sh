@@ -90,7 +90,34 @@ fork_git() { git -C "$FORK_DIR" "$@"; }
 # ---------------------------------------------------------------------------
 log "Preparing a clone of $FORK_REPO@$FORK_BRANCH in $FORK_DIR"
 if [ ! -d "$FORK_DIR/.git" ]; then
-    git clone --quiet --branch "$FORK_BRANCH" "https://github.com/$FORK_REPO.git" "$FORK_DIR"
+    # The CI cache (Swatinem/rust-cache with `workspaces: rustls-fork`)
+    # restores $FORK_DIR/target without a .git, and `git clone` refuses a
+    # non-empty destination — the weekly run then died with exit 128 before
+    # doing anything. Move the restored build aside, clone, and put the
+    # target back so the cache still saves the rebuild.
+    leftover=""
+    if [ -d "$FORK_DIR" ] && [ -n "$(ls -A "$FORK_DIR" 2>/dev/null)" ]; then
+        leftover="$FORK_DIR.leftover.$$"
+        mv "$FORK_DIR" "$leftover"
+    fi
+    # GitHub drops the pack now and then; a retry costs less than a week
+    # without a sync.
+    for attempt in 1 2 3; do
+        if git clone --quiet --branch "$FORK_BRANCH" "https://github.com/$FORK_REPO.git" "$FORK_DIR"; then
+            break
+        fi
+        rm -rf "$FORK_DIR"
+        if [ "$attempt" = 3 ]; then
+            [ -z "$leftover" ] || mv "$leftover" "$FORK_DIR"
+            exit 1
+        fi
+        log "clone attempt $attempt failed, retrying"
+        sleep 10
+    done
+    if [ -n "$leftover" ]; then
+        [ ! -d "$leftover/target" ] || mv "$leftover/target" "$FORK_DIR/target"
+        rm -rf "$leftover"
+    fi
 fi
 fork_git remote get-url upstream >/dev/null 2>&1 || fork_git remote add upstream "$UPSTREAM_URL"
 fork_git fetch --quiet --tags upstream "$UPSTREAM_BRANCH"
