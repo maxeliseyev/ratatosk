@@ -111,7 +111,7 @@ cat >&2 <<MSG
 Next steps:
   echo 'vless://...' > server.txt
   ratatosk -f server.txt -p 1080            # local SOCKS5 proxy
-  sudo ratatosk --tui --tun -f server.txt   # system-wide (asks to install sing-box if missing)
+  sudo ratatosk --tui --tun -f server.txt   # system-wide VPN (native TUN, needs root)
   docker run -p 1080:1080 ghcr.io/maxeliseyev/ratatosk -s 'https://...'   # or the container
   ratatosk service install -f server.txt    # keep it running in the background
 MSG
