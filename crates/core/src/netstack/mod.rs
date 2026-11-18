@@ -13,6 +13,7 @@
 pub mod device;
 pub mod fakedns;
 pub mod flows;
+pub mod sniff;
 
 use crate::protocol::vless::{self, Address};
 use crate::proxy::runtime::{relay_tcp, ProxyClient, UdpOutbound};
@@ -32,6 +33,12 @@ use tracing::{debug, info, warn};
 
 /// A UDP flow nobody sent on for this long is closed (as in SOCKS UDP).
 const UDP_IDLE: Duration = Duration::from_secs(120);
+
+/// How long the netstack waits for a ClientHello on a bare address before
+/// giving up and treating the flow as one without a name.
+const SNIFF_TIMEOUT: Duration = Duration::from_millis(250);
+/// Ports whose first bytes may be a TLS ClientHello worth sniffing.
+const SNIFF_PORTS: [u16; 2] = [443, 8443];
 
 pub struct Netstack {
     pub connector: ProxyClient,
@@ -116,17 +123,33 @@ impl Netstack {
 
     async fn handle_tcp(&self, tcp: IpStackTcpStream) {
         let dst = tcp.peer_addr();
-        let Some(address) = self.target(dst) else {
+        let Some(mut address) = self.target(dst) else {
             debug!("TCP to unknown fake address {dst}, dropped");
             return;
         };
         debug!("TCP {} -> {address}:{}", tcp.local_addr(), dst.port());
+        // A flow that arrives at a bare address has no name yet: the client
+        // resolved it itself. Look into the ClientHello, then route by it.
+        let mut tcp = tcp;
+        let mut prefix = Vec::new();
+        if matches!(address, Address::Ipv4(_) | Address::Ipv6(_))
+            && SNIFF_PORTS.contains(&dst.port())
+        {
+            let (sni, peeked) = sniff::client_hello_sni(&mut tcp, SNIFF_TIMEOUT).await;
+            prefix = peeked;
+            if let Some(sni) = sni {
+                debug!("Sniffed {address}:{} as {sni}", dst.port());
+                address = Address::Domain(sni);
+            }
+        }
         let route = self.connector.router().decide(&address, dst.port());
         let flow = self
             .flows
             .open("tcp", address.to_string(), dst.port(), route);
         STATS.connection_opened();
-        let client = Counted::new(tcp, flow.clone());
+        // Replay the sniffed bytes to the target: inside `Counted`, so they
+        // count towards the flow's upload like the rest.
+        let client = Counted::new(sniff::Prefixed::new(prefix, tcp), flow.clone());
         let result = relay_tcp(client, &self.connector, address.clone(), dst.port(), || {
             flow.dialed()
         })
