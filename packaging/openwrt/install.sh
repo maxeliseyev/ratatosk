@@ -252,6 +252,9 @@ enabled = true
 dns = "8.8.8.8"
 CONFIG
 chmod 600 "$DIR/config.toml"
+# What the watchdog probes through the tunnel; must not be blocked above.
+[ -f "$DIR/probe-url" ] || echo "https://example.com/" > "$DIR/probe-url"
+chmod 600 "$DIR/probe-url"
 
 # --- ratatosk service (native TUN, whole system) ----------------------------
 cat > /etc/init.d/ratatosk <<'INIT'
@@ -288,6 +291,9 @@ cat > /usr/bin/ratatosk-failover <<'FAILOVER'
 set -u
 DIR=/etc/ratatosk
 PROG=/usr/bin/ratatosk
+# Anything reachable only through the tunnel will do; a DoH resolver would be
+# a bad choice, it is blocked by config.toml on purpose.
+PROBE="$(cat "$DIR/probe-url" 2>/dev/null || echo https://example.com/)"
 FAILS=0
 TICKS=0
 
@@ -299,7 +305,7 @@ tun_dev() {
 probe() {
 	dev="$(tun_dev)"
 	[ -n "$dev" ] || return 1
-	curl -fsS -m 8 -o /dev/null --interface "$dev" https://1.1.1.1/cdn-cgi/trace
+	curl -fsS -m 8 -o /dev/null --interface "$dev" "$PROBE"
 }
 
 # Restart on the link at position $1 (1-based); no-op when already active.
@@ -476,18 +482,20 @@ dns_setup
 firewall_zone "$tun"
 /etc/init.d/dnsmasq restart
 /etc/init.d/ratatosk-failover enable
-# `restart` on a service procd has never started fails on ubus: start it.
+# An already running watchdog keeps the old probe and link list in memory, so
+# stop it first: `start` alone is a no-op on a live service.
+/etc/init.d/ratatosk-failover stop 2>/dev/null || true
 /etc/init.d/ratatosk-failover start 2>/dev/null || /etc/init.d/ratatosk-failover restart || true
 
 # --- verify -----------------------------------------------------------------
 say "verifying the tunnel"
-ip_info="$(curl -fsS -m 15 --interface "$tun" https://1.1.1.1/cdn-cgi/trace 2>/dev/null |
-	grep '^ip=' || true)"
-[ -n "$ip_info" ] || die "the tunnel does not answer; check logread | grep ratatosk"
-say "egress through the tunnel: ${ip_info#ip=}"
+probe_url="$(cat "$DIR/probe-url")"
+code="$(curl -fsS -m 15 -o /dev/null -w '%{http_code}' --interface "$tun" "$probe_url" 2>/dev/null || true)"
+[ -n "$code" ] && [ "$code" != "000" ] || die "the tunnel does not answer; check logread | grep ratatosk"
+say "tunnel answers $probe_url with $code"
 cat <<MSG
 
-Done. Every LAN device now egresses through ${ip_info#ip=}.
+Done. Every LAN device now egresses through the exit in /etc/ratatosk/active.txt.
   /etc/init.d/ratatosk stop       # cut the LAN off (fail-closed)
   /etc/init.d/ratatosk start
   ratatosk-failover's log: logread | grep ratatosk-failover
