@@ -91,6 +91,8 @@ jobs:
   ios:
     name: ios xcframework
     runs-on: macos-15
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -112,10 +114,13 @@ jobs:
         run: |
           zip -q -j dist/ratatosk-swift.zip crates/ffi/swift/*.swift
           unzip -l dist/ratatosk-swift.zip
-      - uses: actions/upload-artifact@v6
+      # Straight onto the release: the framework is ~60 MB once the artifact
+      # service has re-packed it, and pulling that back through
+      # download-artifact kept failing after five retries.
+      - uses: softprops/action-gh-release@v3
+        if: startsWith(github.ref, 'refs/tags/v')
         with:
-          name: ios
-          path: |
+          files: |
             dist/RatatoskCore.xcframework.zip
             dist/RatatoskCore.xcframework.zip.sha256
             dist/ratatosk-swift.zip
