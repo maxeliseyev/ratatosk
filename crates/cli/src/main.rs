@@ -591,7 +591,27 @@ fn load_config(args: Args) -> Result<(Config, ServerList)> {
         }
     }
     if let Some(url_str) = vless_url {
-        let config = config_from_link(&url_str, inbound_port)?;
+        let from_link = config_from_link(&url_str, inbound_port)?;
+        // A TOML given together with the link supplies everything but the
+        // server: the file keeps routing/tun/dns static while the link (or the
+        // links file, for failover) is what changes.
+        let config = match config_path {
+            Some(path) => {
+                if !is_toml(&path) {
+                    anyhow::bail!(
+                        "--config with a link needs a TOML config, not {} (JSON and .vpn imports \
+                         already carry their own server)",
+                        path.display()
+                    );
+                }
+                info!(
+                    "Loading config from: {} (server from the link)",
+                    path.display()
+                );
+                Config::load_with_server(&path, from_link.server.clone())?
+            }
+            None => from_link,
+        };
         config.validate()?;
         let servers = match links_file.as_deref().filter(|p| p.is_file()) {
             Some(path) => match ServerList::from_file(path, inbound_port) {
@@ -666,6 +686,14 @@ fn load_config(args: Args) -> Result<(Config, ServerList)> {
     } else {
         anyhow::bail!("No config provided");
     }
+}
+
+/// `true` for a TOML config: the only format that can be combined with a link
+/// (`--config cfg.toml -f link`), since JSON/Xray and `.vpn` imports already
+/// carry the server.
+fn is_toml(path: &std::path::Path) -> bool {
+    path.extension()
+        .is_none_or(|e| e.eq_ignore_ascii_case("toml"))
 }
 
 fn parse_args() -> Result<Args> {
@@ -857,7 +885,8 @@ is, no quoting) and saves it to ~/.config/ratatosk/server.txt. A links file may 
 several servers (one per line): the first is used, --tui switches between them.
 
 Options:
-  -c, --config <PATH>       Path to TOML config, an Xray/Happ JSON config (*.json) or an Amnezia *.vpn file
+  -c, --config <PATH>       Path to TOML config, an Xray/Happ JSON config (*.json) or an Amnezia *.vpn file;
+                            with a link, a TOML supplies everything except the server
   -u, --url <LINK>          vless:// link or Amnezia vpn:// link, quote it in the shell
   -f, --url-file <PATH>     Read the link from a file (first non-comment line)
   -s, --subscription <URL>  Fetch a subscription (base64 or plain list of links) into the links file
@@ -900,7 +929,8 @@ Examples:
 
 #[cfg(test)]
 mod tests {
-    use super::clean_pasted_link;
+    use super::{clean_pasted_link, load_config, Args};
+    use std::path::PathBuf;
 
     #[test]
     fn pasted_links_are_cleaned() {
@@ -913,5 +943,119 @@ mod tests {
             "vless://a@b:1?x=1"
         );
         assert_eq!(clean_pasted_link("\"vless://a@b:1\"\r\n"), "vless://a@b:1");
+    }
+
+    fn args(config_path: Option<PathBuf>, link: Option<&str>) -> Args {
+        Args {
+            command: None,
+            config_path,
+            vless_url: link.map(str::to_string),
+            url_file: None,
+            inbound_port: None,
+            listen: None,
+            verbose: false,
+            check_config: false,
+            probe: false,
+            ping: false,
+            subscription: None,
+            refresh: false,
+            tun: false,
+            tui: false,
+            log_file: None,
+            direct_zones: Vec::new(),
+        }
+    }
+
+    fn temp_config(name: &str, body: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ratatosk-{}-{}", name, uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
+    /// `--config cfg.toml -f link`: the file is the base, the link is the
+    /// server (that is how a router keeps routing static and swaps exits).
+    #[test]
+    fn a_toml_plus_a_link_takes_the_server_from_the_link() {
+        let path = temp_config(
+            "config.toml",
+            r#"
+[inbound]
+address = "127.0.0.1"
+port = 1080
+
+[server]
+address = "example.com"
+port = 443
+uuid = "00000000-0000-0000-0000-000000000000"
+
+[routing]
+direct_suffix = ["ru"]
+
+[[routing.rules]]
+outbound = "block"
+ip_cidr = ["1.1.1.1/32"]
+
+[tun]
+enabled = false
+"#,
+        );
+        let link = "vless://11111111-2222-3333-4444-555555555555@198.51.100.7:8443\
+                    ?security=tls&sni=example.org#from-link";
+        let (config, _) = load_config(args(Some(path.clone()), Some(link))).unwrap();
+        assert_eq!(config.server.address, "198.51.100.7");
+        assert_eq!(config.server.port, 8443);
+        assert_eq!(config.server.remark.as_deref(), Some("from-link"));
+        // The rest still comes from the file.
+        assert_eq!(config.routing.direct_suffix, vec!["ru".to_string()]);
+        assert_eq!(config.routing.rules.len(), 1);
+        assert_eq!(config.routing.rules[0].outbound, "block");
+    }
+
+    /// The packaging case: the file has no `[server]` at all, only policy.
+    #[test]
+    fn a_toml_without_a_server_section_is_accepted_with_a_link() {
+        let path = temp_config(
+            "policy.toml",
+            r#"
+[inbound]
+address = "127.0.0.1"
+port = 1080
+
+[routing]
+direct_suffix = ["ru"]
+
+[[routing.rules]]
+outbound = "block"
+port = [53]
+
+[tun]
+enabled = true
+"#,
+        );
+        let link = "h3://11111111-2222-3333-4444-555555555555@198.51.100.7:443\
+                    ?sni=example.org#stand";
+        let (config, _) = load_config(args(Some(path), Some(link))).unwrap();
+        assert_eq!(config.server.address, "198.51.100.7");
+        assert!(config.tun.enabled);
+        assert_eq!(config.routing.rules.len(), 1);
+    }
+
+    /// A JSON or Amnezia config already carries its own server.
+    #[test]
+    fn a_json_config_is_refused_with_a_link() {
+        let path = temp_config("config.json", "{}");
+        let link = "vless://11111111-2222-3333-4444-555555555555@198.51.100.7:8443?security=tls";
+        let err = load_config(args(Some(path), Some(link))).unwrap_err();
+        assert!(err.to_string().contains("needs a TOML config"), "{err}");
+    }
+
+    /// Without a file the link alone still builds the whole config.
+    #[test]
+    fn a_link_alone_still_works() {
+        let link = "vless://11111111-2222-3333-4444-555555555555@198.51.100.7:8443?security=tls";
+        let (config, _) = load_config(args(None, Some(link))).unwrap();
+        assert_eq!(config.server.address, "198.51.100.7");
     }
 }

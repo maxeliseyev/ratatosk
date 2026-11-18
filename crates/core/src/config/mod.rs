@@ -241,7 +241,7 @@ impl TunConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct ServerConfig {
     /// Display name (the `#fragment` of a vless:// link).
     #[serde(default)]
@@ -523,6 +523,28 @@ impl Config {
         let path = path.into();
         let content = std::fs::read_to_string(&path)?;
         let config: Config = toml::from_str(&content)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Load a TOML config whose `[server]` is supplied by the caller — a link,
+    /// or the link file a failover switches. Everything else (inbound, DNS,
+    /// routing, TUN, mux, runtime) comes from the file, so one static policy
+    /// can outlive any number of exits. A `[server]` in the file is ignored.
+    pub fn load_with_server(path: impl Into<PathBuf>, server: ServerConfig) -> Result<Self> {
+        use anyhow::Context;
+        let path = path.into();
+        let content = std::fs::read_to_string(&path)
+            .with_context(|| format!("cannot read {}", path.display()))?;
+        let mut doc: toml::Value =
+            toml::from_str(&content).with_context(|| format!("cannot parse {}", path.display()))?;
+        let table = doc
+            .as_table_mut()
+            .with_context(|| format!("{}: expected a table", path.display()))?;
+        table.insert("server".to_string(), toml::Value::try_from(server)?);
+        let config: Config = doc
+            .try_into()
+            .with_context(|| format!("cannot parse {}", path.display()))?;
         config.validate()?;
         Ok(config)
     }

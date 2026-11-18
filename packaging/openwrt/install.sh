@@ -22,7 +22,7 @@
 # lookup for link n).
 set -eu
 
-VERSION="${RATATOSK_VERSION:-0.20.4}"
+VERSION="${RATATOSK_VERSION:-0.20.5}"
 REPO="${RATATOSK_REPO:-maxeliseyev/ratatosk}"
 # The netstack answers DNS here; see FakeDns::server_addr in the source.
 FAKE_DNS="198.18.0.2"
@@ -189,6 +189,70 @@ net.ipv6.conf.all.forwarding = 0
 SYSCTL
 sysctl -p /etc/sysctl.d/99-ratatosk.conf >/dev/null 2>&1 || true
 
+# --- static config: routing, DNS policy, TUN knobs --------------------------
+# The link supplies the server (see active.txt); everything here stays put.
+# Blocking DNS on the way out is what keeps split-tunnelling honest: a client
+# that resolves names itself gets real addresses, and then a `.ru` host has no
+# name left to match the domain rule against — it would go through the exit.
+# Forcing it back to dnsmasq means every LAN flow carries a fake address the
+# netstack maps back to a name.
+cat > "$DIR/config.toml" <<'CONFIG'
+# Written by packaging/openwrt/install.sh: the server comes from the link in
+# active.txt, this file owns routing, DNS policy and the TUN.
+[inbound]
+address = "127.0.0.1"
+port = 1080
+
+[routing]
+# Split-tunnel: the Russian zone goes out directly, everything else through
+# the exit. Same as --split-ru, kept here so one file describes the policy.
+direct_suffix = ["ru", "su", "рф"]
+
+# Plain DNS and DoT from the LAN: only dnsmasq may resolve (it forwards to the
+# netstack's FakeDNS, which is answered before any routing happens).
+[[routing.rules]]
+outbound = "block"
+port = [53, 853]
+
+# Known DNS-over-HTTPS resolvers, so a browser cannot sidestep dnsmasq and
+# lose its names. Clients fall back to the system resolver within seconds.
+[[routing.rules]]
+outbound = "block"
+port = [443]
+ip_cidr = [
+  "1.1.1.1/32", "1.0.0.1/32",          # Cloudflare
+  "8.8.8.8/32", "8.8.4.4/32",          # Google
+  "9.9.9.9/32", "149.112.112.112/32",  # Quad9
+  "94.140.14.14/32", "94.140.15.15/32",# AdGuard
+  "208.67.222.222/32", "208.67.220.220/32", # OpenDNS
+  "76.76.2.0/32", "76.76.10.0/32",     # Control D
+  "185.228.168.9/32", "185.228.169.11/32", # CleanBrowsing
+  "45.90.28.0/24", "45.90.30.0/24",    # NextDNS
+  "86.54.11.100/32", "86.54.11.200/32",# DNS0
+  "146.112.41.2/32", "146.112.41.3/32",# Cisco
+  "156.154.70.2/32", "156.154.71.2/32",# Neustar
+  "64.6.64.6/32",                       # Verisign
+]
+
+# The same resolvers by name, for clients that resolved the hostname through
+# dnsmasq first (then the flow carries the name).
+[[routing.rules]]
+outbound = "block"
+domain = [
+  "dns.google", "cloudflare-dns.com", "mozilla.cloudflare-dns.com",
+  "dns.quad9.net", "dns.adguard-dns.com", "doh.opendns.com",
+  "doh.cleanbrowsing.org", "dns.nextdns.io", "dns.dns.sb",
+  "common.dot.dns.yandex.net", "doh.pub", "dns.alidns.com",
+]
+
+[tun]
+enabled = true
+# Upstream for `direct`-routed names (the netstack asks this one itself; the
+# block rules above apply to LAN flows only).
+dns = "8.8.8.8"
+CONFIG
+chmod 600 "$DIR/config.toml"
+
 # --- ratatosk service (native TUN, whole system) ----------------------------
 cat > /etc/init.d/ratatosk <<'INIT'
 #!/bin/sh /etc/rc.common
@@ -202,7 +266,8 @@ PROG=/usr/bin/ratatosk
 
 start_service() {
 	procd_open_instance
-	procd_set_param command "$PROG" -f /etc/ratatosk/active.txt --tun --split-ru
+	procd_set_param command "$PROG" -c /etc/ratatosk/config.toml \
+		-f /etc/ratatosk/active.txt --tun
 	procd_set_param respawn 3600 5 10
 	procd_set_param stdout 1
 	procd_set_param stderr 1
@@ -348,6 +413,20 @@ firewall_zone() {
 	uci set firewall.lan_proxy=forwarding
 	uci set firewall.lan_proxy.src='lan'
 	uci set firewall.lan_proxy.dest='proxy'
+	# The old chain blocked all router-originated DNS to the WAN (a leak
+	# guard for the sing-box setup). The netstack needs that path for the
+	# resolver behind `direct`-routed domains, so the rule goes away.
+	uci -q delete firewall.block_dns_leak || true
+	# Exit hosts stay reachable from the LAN even though the LAN may not use
+	# the WAN directly: their /32 routes make the kernel send those packets
+	# out the WAN, where the fail-closed policy would drop them.
+	uci -q delete firewall.exits_direct || true
+	uci set firewall.exits_direct=rule
+	uci set firewall.exits_direct.name='Allow-LAN-to-exits'
+	uci set firewall.exits_direct.src='lan'
+	uci set firewall.exits_direct.dest='wan'
+	uci set firewall.exits_direct.dest_ip="$(tr '\n' ' ' < "$DIR/exit-ips" 2>/dev/null)"
+	uci set firewall.exits_direct.target='ACCEPT'
 	# No IPv6 escape hatch: the netstack is IPv4-only.
 	uci -q delete firewall.ipv6_leak || true
 	uci set firewall.ipv6_leak=rule
