@@ -13,10 +13,15 @@ export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-16.0}"
 
 targets=(aarch64-apple-ios aarch64-apple-ios-sim)
 rustup target add "${targets[@]}" >/dev/null
+# Cargo does not strip a staticlib, and symbols triple the archive (89 MB →
+# 25 MB per slice), so every slice is stripped before the framework is built.
+slices="$(mktemp -d)"
+trap 'rm -rf "$slices"' EXIT
 args=()
 for target in "${targets[@]}"; do
     cargo build -p ratatosk-ffi --profile ios --target "$target"
-    args+=(-library "target/$target/ios/libratatosk_ffi.a" -headers crates/ffi/include)
+    xcrun strip -S "target/$target/ios/libratatosk_ffi.a" -o "$slices/$target.a"
+    args+=(-library "$slices/$target.a" -headers crates/ffi/include)
 done
 
 rm -rf "$out"
