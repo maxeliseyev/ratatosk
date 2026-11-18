@@ -132,6 +132,7 @@ impl Netstack {
         // resolved it itself. Look into the ClientHello, then route by it.
         let mut tcp = tcp;
         let mut prefix = Vec::new();
+        let mut sniffed = None;
         if matches!(address, Address::Ipv4(_) | Address::Ipv6(_))
             && SNIFF_PORTS.contains(&dst.port())
         {
@@ -139,10 +140,20 @@ impl Netstack {
             prefix = peeked;
             if let Some(sni) = sni {
                 debug!("Sniffed {address}:{} as {sni}", dst.port());
-                address = Address::Domain(sni);
+                sniffed = Some(sni);
             }
         }
-        let route = self.connector.router().decide(&address, dst.port());
+        // The rules still see the dialled address: a destination blocked by
+        // `ip_cidr` must not become reachable because it presented a name.
+        let route = match sniffed {
+            Some(sni) => {
+                address = Address::Domain(sni.clone());
+                self.connector
+                    .router()
+                    .decide_sniffed(&sni, dst.ip(), dst.port())
+            }
+            None => self.connector.router().decide(&address, dst.port()),
+        };
         let flow = self
             .flows
             .open("tcp", address.to_string(), dst.port(), route);

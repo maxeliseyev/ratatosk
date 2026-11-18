@@ -249,6 +249,23 @@ impl Router {
         }
         self.final_outbound
     }
+
+    /// Decide for a flow whose name was sniffed from the wire: the rules see
+    /// the domain **and** the address the client dialled, so an `ip_cidr`
+    /// block still applies once the ClientHello gave the flow a name (a
+    /// DNS-over-HTTPS resolver, for instance, is blocked by address).
+    pub fn decide_sniffed(&self, domain: &str, ip: IpAddr, port: u16) -> Outbound {
+        let domain = to_ascii_domain(domain.trim_end_matches('.'));
+        for rule in &self.rules {
+            if rule.geo_only {
+                continue;
+            }
+            if rule_matches(rule, Some(&domain), Some(ip), port) {
+                return rule.outbound;
+            }
+        }
+        self.final_outbound
+    }
 }
 
 fn compile_rule(rule: &RoutingRule) -> Result<CompiledRule> {
@@ -347,6 +364,35 @@ mod tests {
 
     fn dom(s: &str) -> Address {
         Address::Domain(s.to_string())
+    }
+
+    /// A sniffed flow carries both a name and the address it was dialled at:
+    /// an address block must survive the name (DoH resolvers are blocked by
+    /// `ip_cidr`), and a domain rule must still apply.
+    #[test]
+    fn a_sniffed_flow_matches_address_and_name_rules() {
+        let mut block_doh = rule("block");
+        block_doh.ip_cidr = vec!["1.1.1.1/32".to_string()];
+        block_doh.port = vec![443];
+        let mut ru = rule("direct");
+        ru.domain_suffix = vec!["ru".to_string()];
+        let router = router(vec![block_doh, ru], "proxy");
+
+        let doh: IpAddr = "1.1.1.1".parse().unwrap();
+        // The name from the ClientHello does not rescue a blocked address.
+        assert_eq!(
+            router.decide_sniffed("one.one.one.one", doh, 443),
+            Outbound::Block
+        );
+        // A plain address keeps the default.
+        let other: IpAddr = "93.184.216.34".parse().unwrap();
+        assert_eq!(
+            router.decide_sniffed("example.com", other, 443),
+            Outbound::Proxy
+        );
+        // The name decides when no address rule matches.
+        let ya: IpAddr = "77.88.44.242".parse().unwrap();
+        assert_eq!(router.decide_sniffed("ya.ru", ya, 443), Outbound::Direct);
     }
 
     #[test]

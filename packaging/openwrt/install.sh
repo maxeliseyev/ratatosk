@@ -22,7 +22,7 @@
 # lookup for link n).
 set -eu
 
-VERSION="${RATATOSK_VERSION:-0.20.6}"
+VERSION="${RATATOSK_VERSION:-0.20.7}"
 REPO="${RATATOSK_REPO:-maxeliseyev/ratatosk}"
 # The netstack answers DNS here; see FakeDns::server_addr in the source.
 FAKE_DNS="198.18.0.2"
