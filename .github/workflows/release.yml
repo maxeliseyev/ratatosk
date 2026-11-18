@@ -108,7 +108,7 @@ jobs:
           zip -qry RatatoskCore.xcframework.zip RatatoskCore.xcframework
           shasum -a 256 RatatoskCore.xcframework.zip > RatatoskCore.xcframework.zip.sha256
           cat RatatoskCore.xcframework.zip.sha256
-          (cd ../crates/ffi/swift && zip -q ../../dist/ratatosk-swift.zip ./*.swift)
+          (cd crates/ffi/swift && zip -q "$GITHUB_WORKSPACE/dist/ratatosk-swift.zip" ./*.swift)
           unzip -l ratatosk-swift.zip
       - uses: actions/upload-artifact@v6
         with:
