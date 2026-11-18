@@ -246,7 +246,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_prefixed_stream_replays_then_reads() {
-        let (mut a, mut b) = tokio::io::duplex(64);
+        let (a, mut b) = tokio::io::duplex(64);
         b.write_all(b"world").await.unwrap();
         let mut stream = Prefixed::new(b"hello,".to_vec(), a);
         let mut out = [0u8; 11];

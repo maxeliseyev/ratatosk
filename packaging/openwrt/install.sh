@@ -481,11 +481,21 @@ say "pinning the exit hosts off the tunnel"
 dns_setup
 firewall_zone "$tun"
 /etc/init.d/dnsmasq restart
-/etc/init.d/ratatosk-failover enable
-# An already running watchdog keeps the old probe and link list in memory, so
-# stop it first: `start` alone is a no-op on a live service.
-/etc/init.d/ratatosk-failover stop 2>/dev/null || true
-/etc/init.d/ratatosk-failover start 2>/dev/null || /etc/init.d/ratatosk-failover restart || true
+# With a single exit there is nothing to fail over to: the LAN simply loses
+# its internet when that exit is down (the firewall only forwards into the
+# tunnel), so the watchdog stays off.
+links_count=$(grep -vc '^[[:space:]]*#' "$DIR/servers.txt")
+if [ "$links_count" -gt 1 ]; then
+	/etc/init.d/ratatosk-failover enable
+	# An already running watchdog keeps the old probe and link list in memory,
+	# so stop it first: `start` alone is a no-op on a live service.
+	/etc/init.d/ratatosk-failover stop 2>/dev/null || true
+	/etc/init.d/ratatosk-failover start 2>/dev/null || /etc/init.d/ratatosk-failover restart || true
+else
+	/etc/init.d/ratatosk-failover stop 2>/dev/null || true
+	/etc/init.d/ratatosk-failover disable 2>/dev/null || true
+	say "single exit: no failover, a dead tunnel leaves the LAN without internet"
+fi
 
 # --- verify -----------------------------------------------------------------
 say "verifying the tunnel"

@@ -14,10 +14,12 @@ Fail-closed: the firewall only forwards LAN traffic into the tunnel, never to
 the WAN, so a dead tunnel means no LAN internet — not a silent fallback to the
 ISP.
 
-Two exits are supported. The first link in `/etc/ratatosk/servers.txt` is the
-primary (put `h3://` there: it has the lowest handshake latency), the second is
-used automatically while the primary stops answering, and the primary is taken
-back once it recovers.
+One or two exits. Give two links and the first in `/etc/ratatosk/servers.txt`
+is the primary, the second is used while the primary stops answering, and the
+primary is taken back once it recovers. Give one link and there is no failover:
+the LAN simply has no internet while that exit is down (the firewall only
+forwards into the tunnel), which is the mode to use when a fallback exit would
+leak traffic you would rather cut off.
 
 ## Requirements
 
