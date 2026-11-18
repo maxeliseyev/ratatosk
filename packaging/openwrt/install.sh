@@ -22,7 +22,7 @@
 # lookup for link n).
 set -eu
 
-VERSION="${RATATOSK_VERSION:-0.20.3}"
+VERSION="${RATATOSK_VERSION:-0.20.4}"
 REPO="${RATATOSK_REPO:-maxeliseyev/ratatosk}"
 # The netstack answers DNS here; see FakeDns::server_addr in the source.
 FAKE_DNS="198.18.0.2"
@@ -252,6 +252,10 @@ switch_to() {
 while :; do
 	sleep 20
 	TICKS=$((TICKS + 1))
+	# A tunnel restart removes the exit-host pin of the link it was running
+	# (ratatosk deletes the routes it installed), so put the pins back before
+	# probing: the switch-back probe must not enter the tunnel.
+	/usr/bin/ratatosk-pins
 	count=$(grep -vc '^[[:space:]]*#' "$DIR/servers.txt")
 	[ "$count" -gt 1 ] || continue
 	active=$(grep -n -Fx -f "$DIR/active.txt" "$DIR/servers.txt" | head -n 1 | cut -d: -f1)

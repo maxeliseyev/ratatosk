@@ -568,6 +568,9 @@ mod linux {
             // failover hook), and a plain add would fail with EEXIST and
             // abort start-up.
             // Server IPs via the real gateway (transport off the tunnel).
+            // Not recorded for teardown: the pin is harmless once the tunnel
+            // is gone, but deleting it breaks a concurrent or the next
+            // instance — its transport would enter the tunnel it just built.
             for ip in &self.server_ips {
                 let net = format!("{ip}/32");
                 ip_route(&[
@@ -578,7 +581,6 @@ mod linux {
                     "dev",
                     &self.phys_iface,
                 ])?;
-                self.routed_nets.push(net);
             }
             // Override the default without deleting it: two /1 halves to the TUN.
             ip_route(&["replace", "0.0.0.0/1", "dev", &self.iface])?;
