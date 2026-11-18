@@ -22,7 +22,7 @@
 # lookup for link n).
 set -eu
 
-VERSION="${RATATOSK_VERSION:-0.20.2}"
+VERSION="${RATATOSK_VERSION:-0.20.3}"
 REPO="${RATATOSK_REPO:-maxeliseyev/ratatosk}"
 # The netstack answers DNS here; see FakeDns::server_addr in the source.
 FAKE_DNS="198.18.0.2"
@@ -114,22 +114,67 @@ chmod 600 "$DIR/servers.txt" "$DIR/active.txt"
 
 # ratatosk's own lookup of the exit host must not go into the tunnel it is
 # still building, so pin every exit host to its address.
+: > "$DIR/exit-ips"
 n=0
 for link in $LINKS; do
 	n=$((n + 1))
 	host="$(printf '%s' "$link" | sed -E 's#^[a-z0-9]+://[^@]*@([^:/?#]+).*#\1#')"
 	[ -n "$host" ] && [ "$host" != "$link" ] || die "cannot parse the host out of link $n"
 	eval "pinned=\${SERVER_IP_$n:-}"
+	# On a re-run the pins from last time are the authority: dnsmasq already
+	# points at FakeDNS, so a lookup now would return a 198.18.x fake address.
 	if [ -z "$pinned" ]; then
-		pinned="$(nslookup "$host" 2>/dev/null |
-			awk '/[Aa]ddress/{print $NF}' | grep -Eo '^[0-9]+(\.[0-9]+){3}$' | head -n 1)"
+		pinned="$(awk -v h="$host" '$2 == h {print $1; exit}' /etc/hosts)"
+	fi
+	if [ -z "$pinned" ]; then
+		case "$host" in
+		# A bare address needs no lookup.
+		[0-9]*.[0-9]*.[0-9]*.[0-9]*) pinned="$host" ;;
+		*) pinned="$(nslookup "$host" 2>/dev/null |
+			awk '/[Aa]ddress/{print $NF}' | grep -Eo '^[0-9]+(\.[0-9]+){3}$' | head -n 1)" ;;
+		esac
 	fi
 	[ -n "$pinned" ] || die "cannot resolve $host — re-run with SERVER_IP_$n=<ip>"
-	# An exit host is always named, so the next hop is reachable by name too.
-	sed -i "/[[:space:]]$host\$/d" /etc/hosts 2>/dev/null || true
-	echo "$pinned $host" >> /etc/hosts
-	say "pinned $host -> $pinned"
+	case "$pinned" in
+	198.18.*) die "$host resolved to $pinned, the netstack's fake range: pass SERVER_IP_$n=<real ip>" ;;
+	esac
+	# A named exit host is pinned so the tunnel's own lookup never needs DNS.
+	if [ "$pinned" != "$host" ]; then
+		sed -i "/[[:space:]]$host\$/d" /etc/hosts 2>/dev/null || true
+		echo "$pinned $host" >> /etc/hosts
+		say "pinned $host -> $pinned"
+	fi
+	echo "$pinned" >> "$DIR/exit-ips"
 done
+
+# Keep every exit host off the tunnel even when it is not the active one: the
+# failover probes the primary by handshake, and through the tunnel that probe
+# would have to leave the exit server first. Re-applied on every WAN ifup.
+cat > /usr/bin/ratatosk-pins <<'PINS'
+#!/bin/sh
+# A /32 route to each exit host via the real gateway.
+[ -s /etc/ratatosk/exit-ips ] || exit 0
+# shellcheck disable=SC2046 # the fields are read as $1/$2 on purpose
+set -- $(ip route 2>/dev/null | awk '$1 == "default" {
+	for (i = 2; i <= NF; i++) if ($i == "via") gw = $(i + 1);
+	for (i = 2; i <= NF; i++) if ($i == "dev") dev = $(i + 1);
+	if (dev !~ /^tun/) { print gw, dev; exit }
+}')
+gw="$1"
+dev="$2"
+[ -n "$gw" ] && [ -n "$dev" ] || exit 0
+while read -r ip; do
+	[ -n "$ip" ] && ip route replace "$ip/32" via "$gw" dev "$dev"
+done < /etc/ratatosk/exit-ips
+PINS
+chmod 0755 /usr/bin/ratatosk-pins
+
+cat > /etc/hotplug.d/iface/98-ratatosk-pins <<'HOTPLUG'
+#!/bin/sh
+[ "$ACTION" = ifup ] || exit 0
+case "$INTERFACE" in wan*) /usr/bin/ratatosk-pins & ;; esac
+HOTPLUG
+chmod 0755 /etc/hotplug.d/iface/98-ratatosk-pins
 
 # --- kernel knobs -----------------------------------------------------------
 # quinn's UDP socket needs room for the bandwidth-delay product: the OpenWrt
@@ -159,6 +204,7 @@ start_service() {
 	procd_open_instance
 	procd_set_param command "$PROG" -f /etc/ratatosk/active.txt --tun --split-ru
 	procd_set_param respawn 3600 5 10
+	procd_set_param stdout 1
 	procd_set_param stderr 1
 	procd_set_param env HOME=/root
 	procd_close_instance
@@ -248,6 +294,7 @@ start_service() {
 	procd_open_instance
 	procd_set_param command /usr/bin/ratatosk-failover
 	procd_set_param respawn 3600 5 10
+	procd_set_param stdout 1
 	procd_set_param stderr 1
 	procd_close_instance
 }
@@ -274,7 +321,7 @@ chmod 0755 /etc/hotplug.d/net/99-proxy-fw
 
 firewall_zone() {
 	tun="$1"
-	uci -q delete firewall.proxy
+	uci -q delete firewall.proxy || true
 	uci set firewall.proxy=zone
 	uci set firewall.proxy.name='proxy'
 	uci set firewall.proxy.input='ACCEPT'
@@ -293,12 +340,12 @@ firewall_zone() {
 			i=$((i + 1))
 		fi
 	done
-	uci -q delete firewall.lan_proxy
+	uci -q delete firewall.lan_proxy || true
 	uci set firewall.lan_proxy=forwarding
 	uci set firewall.lan_proxy.src='lan'
 	uci set firewall.lan_proxy.dest='proxy'
 	# No IPv6 escape hatch: the netstack is IPv4-only.
-	uci -q delete firewall.ipv6_leak
+	uci -q delete firewall.ipv6_leak || true
 	uci set firewall.ipv6_leak=rule
 	uci set firewall.ipv6_leak.name='Block-IPv6-leak'
 	uci set firewall.ipv6_leak.family='ipv6'
@@ -339,11 +386,15 @@ done
 [ -n "$tun" ] || die "ratatosk did not create a tun device; see logread"
 say "tun device: $tun"
 
+say "pinning the exit hosts off the tunnel"
+/usr/bin/ratatosk-pins
+
 dns_setup
 firewall_zone "$tun"
 /etc/init.d/dnsmasq restart
 /etc/init.d/ratatosk-failover enable
-/etc/init.d/ratatosk-failover restart
+# `restart` on a service procd has never started fails on ubus: start it.
+/etc/init.d/ratatosk-failover start 2>/dev/null || /etc/init.d/ratatosk-failover restart || true
 
 # --- verify -----------------------------------------------------------------
 say "verifying the tunnel"

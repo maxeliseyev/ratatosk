@@ -563,15 +563,26 @@ mod linux {
 
     impl NetGuard {
         fn install(&mut self, config: &Config, dns_addr: Ipv4Addr) -> Result<()> {
+            // `replace`, not `add`: a pin can already be there (left by a
+            // previous run, installed by the operator, or added by a
+            // failover hook), and a plain add would fail with EEXIST and
+            // abort start-up.
             // Server IPs via the real gateway (transport off the tunnel).
             for ip in &self.server_ips {
                 let net = format!("{ip}/32");
-                ip_route(&["add", &net, "via", &self.gateway, "dev", &self.phys_iface])?;
+                ip_route(&[
+                    "replace",
+                    &net,
+                    "via",
+                    &self.gateway,
+                    "dev",
+                    &self.phys_iface,
+                ])?;
                 self.routed_nets.push(net);
             }
             // Override the default without deleting it: two /1 halves to the TUN.
-            ip_route(&["add", "0.0.0.0/1", "dev", &self.iface])?;
-            ip_route(&["add", "128.0.0.0/1", "dev", &self.iface])?;
+            ip_route(&["replace", "0.0.0.0/1", "dev", &self.iface])?;
+            ip_route(&["replace", "128.0.0.0/1", "dev", &self.iface])?;
             self.routed_nets.push("0.0.0.0/1".into());
             self.routed_nets.push("128.0.0.0/1".into());
             // LAN / link-local / multicast and configured bypasses around it.
@@ -580,7 +591,16 @@ mod linux {
                 .map(|s| s.to_string())
                 .chain(config.tun.bypass_cidrs.iter().cloned())
             {
-                if ip_route(&["add", &net, "via", &self.gateway, "dev", &self.phys_iface]).is_ok() {
+                if ip_route(&[
+                    "replace",
+                    &net,
+                    "via",
+                    &self.gateway,
+                    "dev",
+                    &self.phys_iface,
+                ])
+                .is_ok()
+                {
                     self.routed_nets.push(net);
                 }
             }

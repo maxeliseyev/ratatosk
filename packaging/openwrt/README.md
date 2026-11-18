@@ -46,7 +46,7 @@ watchdog), rewires the firewall and dnsmasq, then verifies the tunnel by asking
 `1.1.1.1` through it. Re-running is safe (idempotent) and reorders the links to
 the arguments given.
 
-Env overrides: `RATATOSK_VERSION` (default `0.20.2`), `RATATOSK_REPO`,
+Env overrides: `RATATOSK_VERSION` (default `0.20.3`), `RATATOSK_REPO`,
 `SERVER_IP_1` / `SERVER_IP_2` (skip the DNS lookup for that link).
 
 Check with your phone or laptop on the Wi-Fi/LAN:
@@ -62,6 +62,8 @@ curl -s https://ipinfo.io/json      # should show the exit server's IP/city
 | `/usr/bin/ratatosk` | the client binary (static aarch64/x86_64 musl) |
 | `/etc/ratatosk/servers.txt` | the links, **first = primary exit** (mode 600) |
 | `/etc/ratatosk/active.txt` | the exit in use (the watchdog rewrites it) |
+| `/etc/ratatosk/exit-ips` | every exit host address, kept off the tunnel |
+| `/usr/bin/ratatosk-pins` | `/32 via <wan gateway>` for each of them, re-applied on WAN ifup |
 | `/etc/init.d/ratatosk` | procd service: `-f active.txt --tun --split-ru` |
 | `/usr/bin/ratatosk-failover` | probes the tunnel, switches the exit link |
 | `/etc/init.d/ratatosk-failover` | procd service that keeps the watchdog alive |
@@ -69,8 +71,16 @@ curl -s https://ipinfo.io/json      # should show the exit server's IP/city
 | `/etc/config/firewall` | a `proxy` zone on the tun (masq + MSS clamp), `lan → proxy` only, IPv6-leak block |
 | `/etc/config/dhcp` | dnsmasq: `noresolv`, upstream `198.18.0.2`, rebind protection off |
 | `/etc/config/network` | `peerdns=0` on `wan`/`wan6`: the ISP resolvers never come back |
-| `/etc/hotplug.d/net/99-proxy-fw` | reloads fw4 when the tun device appears (boot order) |
+| `/etc/hotplug.d/iface/98-ratatosk-pins` | re-pins the exit hosts when the WAN comes up |
+| `/etc/hotplug.d/net/99-proxy-fw` | re-points the fw4 `proxy` zone at the tun that appeared |
 | `/etc/hosts` | pins `<exit-host> → <ip>` (see note) |
+
+**Why every exit host is pinned, not just the active one:** the failover probes
+the primary with a bare handshake while the router is running on the fallback.
+Without a `/32` route to the primary through the real gateway, that probe would
+enter the active tunnel and have to leave the exit server first — an extra,
+fragile hop that made the switch-back useless in testing. The pins are also
+re-applied on every WAN ifup, because a new lease brings a new gateway.
 
 **Why the `/etc/hosts` pin matters:** without it, ratatosk's own DNS lookup of
 the exit host is pulled into the tunnel it is still building → deadlock. With
@@ -128,7 +138,8 @@ uci commit wireless && wifi reload
 - **One exit per process.** ratatosk holds a single server per instance, so a
   switch is a service restart (a second of LAN downtime). The watchdog does it
   after three failed probes, and retries the primary every ~100 s while on a
-  fallback.
+  fallback (a handshake over the pinned `/32`, so the retry never depends on
+  the tunnel it is trying to replace).
 - **IPv6 is not tunnelled** (the netstack is IPv4-only): an fw4 rule rejects
   LAN→WAN IPv6 so nothing leaks around the tunnel.
 - **Migrating from the sing-box setup:** the installer stops and removes the
