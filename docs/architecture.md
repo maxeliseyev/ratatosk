@@ -5,7 +5,7 @@
 | Каталог | Cargo-пакет | Ответственность |
 |---|---|---|
 | `crates/core` | `ratatosk-core` | Конфигурация, VLESS/REALITY/Vision/Mux, транспорты, h3-клиент, routing, DNS, SOCKS5/HTTP, userspace netstack |
-| `crates/cli` | `ratatosk` | Бинарник `ratatosk`, TUI, журнал, сигналы desktop-приложения, службы, TUN через sing-box и xray-sidecar |
+| `crates/cli` | `ratatosk` | Бинарник `ratatosk`, TUI, журнал, сигналы desktop-приложения, службы, нативный TUN (netstack + FakeDNS в процессе) и xray-sidecar для экзотических импортов |
 | `crates/server` | `ratatosk-server` | Сервер QUIC-транспорта, аутентификация и соединения с целями |
 | `crates/ffi` | `ratatosk-ffi` | C ABI и Swift-обёртки для Ratatosk, staticlib и заголовки |
 

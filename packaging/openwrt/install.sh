@@ -1,251 +1,361 @@
 #!/bin/sh
-# ratatosk on OpenWrt: a transparent, whole-LAN anti-censorship router.
+# ratatosk on OpenWrt: a transparent, whole-LAN gateway in a single process.
 #
-# Routes every device on the router's LAN through the h3/QUIC transport to the
-# exit server, with DNS resolved inside the tunnel (no leak). Chain:
+# Every device on the router's LAN egresses through the tunnel; DNS is resolved
+# inside it (no leak). The TUN device, the netstack, FakeDNS and the routing
+# rules all live in `ratatosk` itself — no sing-box, no sidecar.
 #
-#   LAN device -> tun -> sing-box -> SOCKS -> ratatosk -> h3/QUIC -> exit server
+#   LAN device -> tun -> ratatosk (netstack + FakeDNS + routing) -> h3/QUIC -> exit
 #
-# ratatosk speaks our transport and offers a local SOCKS5 inbound; sing-box is the
-# TUN + routing + DNS layer (sing-box's own DoH runs over the proxy, since raw
-# UDP DNS over SOCKS is unreliable). The setup is fail-closed: LAN clients have
-# no direct WAN path, and DNS is not allowed to fall back to the ISP resolvers.
-# Requires an aarch64 or x86_64 OpenWrt
-# device (the aws-lc-rs crypto core has no MIPS/ARMv7 build) with ~20 MB free on
-# /overlay and the default OpenWrt package feeds reachable.
+# Fail-closed: LAN traffic is only forwarded into the tunnel, so when the
+# tunnel is down the LAN has no internet rather than a silent fallback to the
+# ISP. The first link is the primary exit; the second one (optional) is used
+# automatically when the primary stops answering, and the primary is retried
+# afterwards.
 #
 # Usage, on the router (or over ssh):
-#   sh install.sh 'h3://<uuid>@<host>:443?sni=<host>#label'
-#   sh install.sh 'vless://<uuid>@<host>:443?security=reality&...#label'
-# Re-running is safe (idempotent); it reconfigures in place.
+#   sh install.sh 'h3://<uuid>@<host>:443?sni=<host>#stand' ['vless://...@<host>:443?...']
+# Re-running is safe (idempotent): it reconfigures in place, keeping the link
+# order from the arguments.
 #
-# Env overrides: RATATOSK_VERSION (default below), SERVER_IP (skip DNS lookup),
-# SOCKS_PORT (default 1080), REPO (GitHub owner/repo of the release).
+# Env overrides: RATATOSK_VERSION, RATATOSK_REPO, SERVER_IP_<n> (skip the DNS
+# lookup for link n).
 set -eu
 
-RATATOSK_VERSION="${RATATOSK_VERSION:-${VPROXY_VERSION:-0.19.0}}"
-SOCKS_PORT="${SOCKS_PORT:-1080}"
-REPO="${REPO:-maxeliseyev/ratatosk}"
+VERSION="${RATATOSK_VERSION:-0.20.2}"
+REPO="${RATATOSK_REPO:-maxeliseyev/ratatosk}"
+# The netstack answers DNS here; see FakeDns::server_addr in the source.
+FAKE_DNS="198.18.0.2"
+DIR=/etc/ratatosk
+PROG=/usr/bin/ratatosk
 
-LINK="${1:-$(cat /etc/ratatosk/link 2>/dev/null || cat /etc/vproxy/link 2>/dev/null || true)}"
-[ -n "$LINK" ] || { echo "usage: sh install.sh 'h3://<uuid>@<host>:443?sni=<host>#label' (or a vless:// REALITY link)" >&2; exit 1; }
+say() { echo ">> $*"; }
+die() { echo "error: $*" >&2; exit 1; }
 
-# --- parse the exit host out of the link ------------------------------------
-HOST=$(printf '%s' "$LINK" | sed -E 's#^[a-z0-9]+://[^@]*@([^:/?#]+).*#\1#')
-[ -n "$HOST" ] && [ "$HOST" != "$LINK" ] || { echo "cannot parse host from link" >&2; exit 1; }
-echo ">> exit host: $HOST  (ratatosk $RATATOSK_VERSION)"
+# --- links ------------------------------------------------------------------
+# Keep the existing list when called without arguments (reconfigure in place).
+if [ "$#" -gt 0 ]; then
+	LINKS="$*"
+else
+	[ -f "$DIR/servers.txt" ] || die "usage: sh install.sh '<primary link>' ['<fallback link>']"
+	LINKS="$(grep -v '^[[:space:]]*#' "$DIR/servers.txt" | tr '\n' ' ')"
+fi
+[ -n "$LINKS" ] || die "no links given"
 
-# --- arch guard + release asset name ----------------------------------------
-ARCH=$(uname -m)
-case "$ARCH" in
-  aarch64) ASSET=arm64 ;;
-  x86_64)  ASSET=x86_64 ;;
-  *) echo "unsupported arch '$ARCH' — the crypto core builds only on aarch64/x86_64" >&2; exit 1 ;;
+# --- arch guard -------------------------------------------------------------
+case "$(uname -m)" in
+	aarch64) ASSET=arm64 ;;
+	x86_64) ASSET=x86_64 ;;
+	*) die "unsupported arch '$(uname -m)': the aws-lc-rs crypto core builds only on aarch64/x86_64" ;;
 esac
 
-# --- dependencies (sing-box, tun, curl) -------------------------------------
-echo ">> installing dependencies"
+# --- dependencies -----------------------------------------------------------
+# kmod-tun for /dev/net/tun, curl for the health probe, ca-bundle for the TLS
+# handshake with the exit server.
+say "installing dependencies"
 if command -v apk >/dev/null 2>&1; then
-  apk update >/dev/null 2>&1 || true
-  apk add sing-box kmod-tun curl >/dev/null
+	apk update >/dev/null 2>&1 || true
+	apk add kmod-tun curl ca-bundle >/dev/null
 else
-  opkg update >/dev/null 2>&1 || true
-  opkg install sing-box kmod-tun curl >/dev/null
+	opkg update >/dev/null 2>&1 || true
+	opkg install kmod-tun curl ca-bundle >/dev/null
 fi
 modprobe tun 2>/dev/null || true
-[ -e /dev/net/tun ] || { echo "no /dev/net/tun after loading kmod-tun" >&2; exit 1; }
+[ -e /dev/net/tun ] || die "no /dev/net/tun after loading kmod-tun"
 
-# --- ratatosk binary (from the GitHub release, if not already this version) ---
-if ! /usr/bin/ratatosk --version 2>/dev/null | grep -q "$RATATOSK_VERSION"; then
-  PKG="ratatosk-linux-${ASSET}-musl"
-  TGZ="$PKG.tar.gz"
-  URL="https://github.com/$REPO/releases/download/v${RATATOSK_VERSION}/$TGZ"
-  echo ">> downloading $URL"
-  if ! curl -fsSL -o "/tmp/$TGZ" "$URL"; then
-    # Releases cut before the rename still carry vproxy-* assets.
-    PKG="vproxy-linux-${ASSET}-musl"
-    TGZ="$PKG.tar.gz"
-    URL="https://github.com/$REPO/releases/download/v${RATATOSK_VERSION}/$TGZ"
-    echo ">> no ratatosk asset; trying legacy $URL"
-    curl -fsSL -o "/tmp/$TGZ" "$URL"
-  fi
-  tar xzf "/tmp/$TGZ" -C /tmp
-  BIN="/tmp/$PKG/ratatosk"
-  [ -x "$BIN" ] || BIN="/tmp/$PKG/vproxy"
-  install -m 0755 "$BIN" /usr/bin/ratatosk
-  rm -rf "/tmp/$TGZ" "/tmp/$PKG"
+# --- retire the sing-box based install --------------------------------------
+# The old chain was ratatosk (SOCKS) + sing-box (TUN). Both services and the
+# package go away; ratatosk owns the TUN now.
+for svc in sing-box vproxy vproxy-reality; do
+	if [ -x "/etc/init.d/$svc" ]; then
+		say "retiring $svc"
+		/etc/init.d/$svc stop 2>/dev/null || true
+		/etc/init.d/$svc disable 2>/dev/null || true
+	fi
+done
+rm -f /etc/init.d/vproxy /etc/init.d/vproxy-reality
+if apk info -e sing-box >/dev/null 2>&1; then
+	apk del sing-box >/dev/null 2>&1 || true
 fi
-echo ">> ratatosk: $(/usr/bin/ratatosk --version)"
+if opkg list-installed 2>/dev/null | grep -q '^sing-box '; then
+	opkg remove sing-box >/dev/null 2>&1 || true
+fi
+rm -rf /etc/sing-box /etc/config/sing-box
 
-# --- link + pin the exit host so ratatosk resolves it WITHOUT the tunnel ------
-# (otherwise ratatosk's own DNS for the exit host is pulled into the tunnel it is
-# trying to build -> deadlock). The pin + the route rule keep its QUIC direct.
-mkdir -p /etc/ratatosk
-if [ -f /etc/vproxy/link ] && [ ! -f /etc/ratatosk/link ]; then
-  mv /etc/vproxy/link /etc/ratatosk/link
-fi
-printf '%s\n' "$LINK" > /etc/ratatosk/link
-chmod 600 /etc/ratatosk/link
+# The rename-era layout: links and SOCKS services under /etc/vproxy.
+rm -rf /etc/vproxy
 
-IP="${SERVER_IP:-}"
-if [ -z "$IP" ]; then
-  IP=$(nslookup "$HOST" 2>/dev/null | sed -n '/^Name:/,$p' | awk '/[Aa]ddress/{print $NF}' | grep -Eo '^[0-9]+(\.[0-9]+){3}$' | head -1)
+# --- ratatosk binary --------------------------------------------------------
+if ! "$PROG" --version 2>/dev/null | grep -q "$VERSION"; then
+	PKG="ratatosk-linux-${ASSET}-musl"
+	URL="https://github.com/$REPO/releases/download/v${VERSION}/$PKG.tar.gz"
+	say "downloading $URL"
+	curl -fsSL -o "/tmp/$PKG.tar.gz" "$URL" || die "cannot download $URL"
+	# Refuse to install an unverified binary when the release carries a sum.
+	if curl -fsSL -o "/tmp/$PKG.sum" "$URL.sha256" 2>/dev/null; then
+		expected="$(awk '{print $1}' "/tmp/$PKG.sum")"
+		actual="$(sha256sum "/tmp/$PKG.tar.gz" | awk '{print $1}')"
+		[ "$expected" = "$actual" ] || die "sha256 mismatch for $PKG.tar.gz"
+	fi
+	tar xzf "/tmp/$PKG.tar.gz" -C /tmp
+	cp "/tmp/$PKG/ratatosk" "$PROG.new"
+	chmod 0755 "$PROG.new"
+	mv "$PROG.new" "$PROG"
+	rm -rf "/tmp/$PKG.tar.gz" "/tmp/$PKG.sum" "/tmp/$PKG"
 fi
-[ -n "$IP" ] || { echo "cannot resolve $HOST — re-run with SERVER_IP=<ip>" >&2; exit 1; }
-sed -i "/[[:space:]]$HOST\$/d" /etc/hosts 2>/dev/null || true
-echo "$IP $HOST" >> /etc/hosts
-echo ">> pinned $HOST -> $IP in /etc/hosts"
+say "ratatosk: $("$PROG" --version)"
 
-# --- ratatosk procd service (SOCKS5 on loopback) ------------------------------
-# Stop and remove a service left by a pre-rename install.
-if [ -f /etc/init.d/vproxy ]; then
-  /etc/init.d/vproxy stop 2>/dev/null || true
-  /etc/init.d/vproxy disable 2>/dev/null || true
-  rm -f /etc/init.d/vproxy
-fi
-cat > /etc/init.d/ratatosk <<INIT
+# --- links + pinned exit hosts ---------------------------------------------
+mkdir -p "$DIR"
+chmod 700 "$DIR"
+printf '%s\n' $LINKS > "$DIR/servers.txt"
+head -n 1 "$DIR/servers.txt" > "$DIR/active.txt"
+chmod 600 "$DIR/servers.txt" "$DIR/active.txt"
+
+# ratatosk's own lookup of the exit host must not go into the tunnel it is
+# still building, so pin every exit host to its address.
+n=0
+for link in $LINKS; do
+	n=$((n + 1))
+	host="$(printf '%s' "$link" | sed -E 's#^[a-z0-9]+://[^@]*@([^:/?#]+).*#\1#')"
+	[ -n "$host" ] && [ "$host" != "$link" ] || die "cannot parse the host out of link $n"
+	eval "pinned=\${SERVER_IP_$n:-}"
+	if [ -z "$pinned" ]; then
+		pinned="$(nslookup "$host" 2>/dev/null |
+			awk '/[Aa]ddress/{print $NF}' | grep -Eo '^[0-9]+(\.[0-9]+){3}$' | head -n 1)"
+	fi
+	[ -n "$pinned" ] || die "cannot resolve $host — re-run with SERVER_IP_$n=<ip>"
+	# An exit host is always named, so the next hop is reachable by name too.
+	sed -i "/[[:space:]]$host\$/d" /etc/hosts 2>/dev/null || true
+	echo "$pinned $host" >> /etc/hosts
+	say "pinned $host -> $pinned"
+done
+
+# --- kernel knobs -----------------------------------------------------------
+# quinn's UDP socket needs room for the bandwidth-delay product: the OpenWrt
+# default of 208 KiB caps a single stream at ~5 Mbit/s per 30 ms of RTT.
+cat > /etc/sysctl.d/99-ratatosk.conf <<'SYSCTL'
+net.core.rmem_max = 4194304
+net.core.wmem_max = 4194304
+net.core.rmem_default = 262144
+net.core.wmem_default = 262144
+net.ipv4.ip_forward = 1
+net.ipv6.conf.all.forwarding = 0
+SYSCTL
+sysctl -p /etc/sysctl.d/99-ratatosk.conf >/dev/null 2>&1 || true
+
+# --- ratatosk service (native TUN, whole system) ----------------------------
+cat > /etc/init.d/ratatosk <<'INIT'
 #!/bin/sh /etc/rc.common
-# ratatosk h3 client — local SOCKS5 inbound; sing-box routes the LAN into it.
+# ratatosk: native TUN for the whole router; LAN traffic is forwarded into it
+# by the firewall. `active.txt` holds the exit in use — the watchdog switches
+# it between the links of `servers.txt`.
 USE_PROCD=1
 START=95
 STOP=10
 PROG=/usr/bin/ratatosk
 
 start_service() {
-    procd_open_instance
-    procd_set_param command "\$PROG" -f /etc/ratatosk/link -l 127.0.0.1 -p $SOCKS_PORT
-    procd_set_param respawn
-    procd_set_param stdout 1
-    procd_set_param stderr 1
-    procd_set_param env HOME=/root
-    procd_close_instance
+	procd_open_instance
+	procd_set_param command "$PROG" -f /etc/ratatosk/active.txt --tun --split-ru
+	procd_set_param respawn 3600 5 10
+	procd_set_param stderr 1
+	procd_set_param env HOME=/root
+	procd_close_instance
 }
 INIT
 chmod 0755 /etc/init.d/ratatosk
-/etc/init.d/ratatosk enable
 
-# --- sing-box config: tun + DNS-hijack (DoH over the proxy) + routing -------
-mkdir -p /etc/sing-box
-cat > /etc/sing-box/config.json <<CFG
-{
-  "log": { "level": "warn", "output": "/tmp/sb.log", "timestamp": true },
-  "dns": {
-    "servers": [
-      { "type": "https", "tag": "remote", "server": "1.1.1.1", "detour": "proxy" }
-    ],
-    "final": "remote",
-    "strategy": "ipv4_only"
-  },
-  "inbounds": [
-    {
-      "type": "tun",
-      "tag": "tun-in",
-      "address": ["172.19.0.1/30"],
-      "auto_route": true,
-      "strict_route": true,
-      "stack": "system"
-    }
-  ],
-  "outbounds": [
-    { "type": "socks", "tag": "proxy", "server": "127.0.0.1", "server_port": $SOCKS_PORT },
-    { "type": "direct", "tag": "direct" }
-  ],
-  "route": {
-    "auto_detect_interface": true,
-    "rules": [
-      { "action": "sniff" },
-      { "protocol": "dns", "action": "hijack-dns" },
-      { "ip_cidr": ["$IP/32"], "outbound": "direct" },
-      { "ip_is_private": true, "outbound": "direct" }
-    ],
-    "final": "proxy"
-  }
-}
-CFG
-sing-box check -c /etc/sing-box/config.json
-
-# sing-box must run as root for TUN/auto_route (the packaged default is a
-# low-priv user, which cannot set up the tunnel).
-uci set sing-box.main.user='root'
-uci set sing-box.main.enabled='1'
-uci set sing-box.main.conffile='/etc/sing-box/config.json'
-uci commit sing-box
-/etc/init.d/sing-box enable
-
-# --- firewall: allow LAN clients to be forwarded into the tunnel -----------
-# tun0 is unzoned by default and fw4's forward policy is drop, so forwarded
-# LAN traffic to it is rejected (the router's own traffic still works). Put
-# tun0 in its own zone (masq + MSS clamp) and allow lan -> proxy forwarding.
-uci -q delete firewall.proxy || true
-uci set firewall.proxy='zone'
-uci set firewall.proxy.name='proxy'
-uci set firewall.proxy.input='ACCEPT'
-uci set firewall.proxy.output='ACCEPT'
-uci set firewall.proxy.forward='ACCEPT'
-uci set firewall.proxy.masq='1'
-uci set firewall.proxy.mtu_fix='1'
-uci add_list firewall.proxy.device='tun0'
-uci -q delete firewall.lan_proxy || true
-uci set firewall.lan_proxy='forwarding'
-uci set firewall.lan_proxy.src='lan'
-uci set firewall.lan_proxy.dest='proxy'
-
-# Fail closed: remove the stock lan -> wan forwarding. Without it, if sing-box
-# crashes or is stopped, LAN packets still route through the WAN default and
-# leak to the ISP. With only lan -> proxy, they hit fw4's drop policy instead.
-i=0
-while uci -q get "firewall.@forwarding[$i]" >/dev/null; do
-  if [ "$(uci -q get "firewall.@forwarding[$i].src")" = lan ] &&
-     [ "$(uci -q get "firewall.@forwarding[$i].dest")" = wan ]; then
-    uci -q delete "firewall.@forwarding[$i]"
-  else
-    i=$((i + 1))
-  fi
-done
-
-# dnsmasq runs on the router, so its queries take the output path, not the
-# forwarded one. Block output to WAN port 53: while the tunnel is up the query
-# is routed into tun0 and hijacked by sing-box; while it is down it is rejected
-# instead of revealing every name to the ISP resolver.
-uci -q delete firewall.block_dns_leak || true
-uci set firewall.block_dns_leak='rule'
-uci set firewall.block_dns_leak.name='Block-DNS-leak-to-WAN'
-uci set firewall.block_dns_leak.dest='wan'
-uci set firewall.block_dns_leak.proto='tcp udp'
-uci set firewall.block_dns_leak.dest_port='53'
-uci set firewall.block_dns_leak.target='REJECT'
-uci commit firewall
-
-# Send LAN DNS through the tunnel as well. dnsmasq asks a public resolver;
-# sing-box's route table sends the router's output into tun0, where the DNS
-# hijack answers it. noresolv stops dnsmasq from using the ISP servers that
-# DHCP put in /tmp/resolv.conf.d/resolv.conf.auto.
-uci set dhcp.@dnsmasq[0].noresolv='1'
-uci -q delete dhcp.@dnsmasq[0].server || true
-uci add_list dhcp.@dnsmasq[0].server='1.1.1.1'
-uci commit dhcp
-
-# At boot fw4 starts before sing-box creates tun0, so the zone binds to nothing
-# until a reload. Reload fw4 whenever tun0 appears.
-mkdir -p /etc/hotplug.d/net
-cat > /etc/hotplug.d/net/99-proxy-fw <<'HP'
+# --- exit watchdog ----------------------------------------------------------
+# ratatosk holds one exit per process, so switching links means restarting it.
+# Every 20 s the tunnel is probed through its own device; three failures in a
+# row move to the next link in servers.txt. While running on a fallback, the
+# primary is retried (a bare handshake) and taken back when it answers again.
+cat > /usr/bin/ratatosk-failover <<'FAILOVER'
 #!/bin/sh
-[ "$ACTION" = "add" ] && { [ "$INTERFACE" = "tun0" ] || [ "$DEVICE" = "tun0" ]; } && fw4 reload
-HP
+# Switch the exit in /etc/ratatosk/active.txt when the tunnel stops working.
+set -u
+DIR=/etc/ratatosk
+PROG=/usr/bin/ratatosk
+FAILS=0
+TICKS=0
+
+# BusyBox has no `ip -br`: read the device names out of `ip link show`.
+tun_dev() {
+	ip link show 2>/dev/null | awk '/^[0-9]+: tun/{sub(":", "", $2); print $2; exit}'
+}
+
+probe() {
+	dev="$(tun_dev)"
+	[ -n "$dev" ] || return 1
+	curl -fsS -m 8 -o /dev/null --interface "$dev" https://1.1.1.1/cdn-cgi/trace
+}
+
+# Restart on the link at position $1 (1-based); no-op when already active.
+switch_to() {
+	link="$(sed -n "$1p" "$DIR/servers.txt")"
+	[ -n "$link" ] || return 1
+	[ "$link" = "$(cat "$DIR/active.txt")" ] && return 0
+	echo "ratatosk-failover: switching to link $1 ($(printf '%s' "$link" | sed -E 's#^([a-z0-9]+://)[^@]*@([^:/?#]+).*#\1***@\2#'))"
+	printf '%s\n' "$link" > "$DIR/active.txt"
+	chmod 600 "$DIR/active.txt"
+	/etc/init.d/ratatosk restart
+	sleep 5
+}
+
+while :; do
+	sleep 20
+	TICKS=$((TICKS + 1))
+	count=$(grep -vc '^[[:space:]]*#' "$DIR/servers.txt")
+	[ "$count" -gt 1 ] || continue
+	active=$(grep -n -Fx -f "$DIR/active.txt" "$DIR/servers.txt" | head -n 1 | cut -d: -f1)
+	[ -n "$active" ] || active=1
+
+	if probe; then
+		FAILS=0
+		# Back on a fallback and the primary answers: prefer it again.
+		if [ "$active" -gt 1 ] && [ $((TICKS % 5)) -eq 0 ]; then
+			if "$PROG" --probe -f "$DIR/servers.txt" >/dev/null 2>&1; then
+				switch_to 1
+				TICKS=0
+			else
+				echo "ratatosk-failover: primary still down, staying on link $active"
+			fi
+		fi
+		continue
+	fi
+
+	FAILS=$((FAILS + 1))
+	echo "ratatosk-failover: probe failed ($FAILS/3) on link $active"
+	if [ "$FAILS" -ge 3 ]; then
+		next=$((active % count + 1))
+		switch_to "$next"
+		FAILS=0
+		TICKS=0
+	fi
+done
+FAILOVER
+chmod 0755 /usr/bin/ratatosk-failover
+
+cat > /etc/init.d/ratatosk-failover <<'INIT'
+#!/bin/sh /etc/rc.common
+# Keeps the tunnel on a working exit (see /usr/bin/ratatosk-failover).
+USE_PROCD=1
+START=96
+STOP=10
+
+start_service() {
+	procd_open_instance
+	procd_set_param command /usr/bin/ratatosk-failover
+	procd_set_param respawn 3600 5 10
+	procd_set_param stderr 1
+	procd_close_instance
+}
+INIT
+chmod 0755 /etc/init.d/ratatosk-failover
+
+# --- firewall ---------------------------------------------------------------
+# A `proxy` zone that owns the TUN (masqueraded, so LAN flows look like the
+# router's own to the netstack), the only forwarding the LAN gets, and a
+# reload-on-appearance hook for boot order.
+cat > /etc/hotplug.d/net/99-proxy-fw <<'HOTPLUG'
+#!/bin/sh
+# fw4 caches device names: point the proxy zone at the tun that just appeared
+# (the netstack picks the first free tun device, which need not be tun0).
+[ "$ACTION" = add ] || exit 0
+case "$DEVICE" in tun*) ;; *) exit 0 ;; esac
+if [ "$(uci -q get firewall.proxy.device)" != "$DEVICE" ]; then
+	uci set firewall.proxy.device="$DEVICE"
+	uci commit firewall
+fi
+/etc/init.d/firewall reload >/dev/null 2>&1 &
+HOTPLUG
 chmod 0755 /etc/hotplug.d/net/99-proxy-fw
 
-# --- (re)start, ratatosk first so sing-box's SOCKS outbound has a listener ----
-echo ">> starting services"
-/etc/init.d/ratatosk restart
-sleep 2
-/etc/init.d/dnsmasq restart
-/etc/init.d/sing-box restart
-sleep 6
-fw4 reload >/dev/null 2>&1 || true   # bind the proxy zone now that tun0 exists
+firewall_zone() {
+	tun="$1"
+	uci -q delete firewall.proxy
+	uci set firewall.proxy=zone
+	uci set firewall.proxy.name='proxy'
+	uci set firewall.proxy.input='ACCEPT'
+	uci set firewall.proxy.output='ACCEPT'
+	uci set firewall.proxy.forward='ACCEPT'
+	uci set firewall.proxy.masq='1'
+	uci set firewall.proxy.mtu_fix='1'
+	uci set firewall.proxy.device="$tun"
+	# The LAN never talks to the WAN directly: fail-closed. Only lan -> proxy
+	# survives, so a dead tunnel means no LAN internet at all.
+	i=0
+	while uci -q get "firewall.@forwarding[$i]" >/dev/null 2>&1; do
+		if [ "$(uci -q get "firewall.@forwarding[$i].src")" = lan ]; then
+			uci -q delete "firewall.@forwarding[$i]"
+		else
+			i=$((i + 1))
+		fi
+	done
+	uci -q delete firewall.lan_proxy
+	uci set firewall.lan_proxy=forwarding
+	uci set firewall.lan_proxy.src='lan'
+	uci set firewall.lan_proxy.dest='proxy'
+	# No IPv6 escape hatch: the netstack is IPv4-only.
+	uci -q delete firewall.ipv6_leak
+	uci set firewall.ipv6_leak=rule
+	uci set firewall.ipv6_leak.name='Block-IPv6-leak'
+	uci set firewall.ipv6_leak.family='ipv6'
+	uci set firewall.ipv6_leak.src='lan'
+	uci set firewall.ipv6_leak.dest='wan'
+	uci set firewall.ipv6_leak.target='REJECT'
+	uci commit firewall
+	/etc/init.d/firewall reload
+}
 
-echo
-echo ">> done. Checking the exit:"
-OUT=$(curl -s --max-time 20 https://ipinfo.io/json 2>/dev/null || true)
-echo "$OUT" | grep -E '"ip"|"city"|"country"' || echo "   (no answer yet — give it a few seconds and retry: curl -s https://ipinfo.io/json)"
-echo
-echo "All LAN traffic now exits through $HOST. To stop: /etc/init.d/sing-box stop"
+# --- DNS --------------------------------------------------------------------
+# dnsmasq forwards to the netstack's FakeDNS, so names are resolved inside the
+# tunnel and the answers are fake addresses the netstack maps back to names.
+# Rebind protection would drop those 198.18/15 answers, hence it is off.
+dns_setup() {
+	uci set dhcp.@dnsmasq[0].noresolv='1'
+	uci set dhcp.@dnsmasq[0].rebind_protection='0'
+	while uci -q delete dhcp.@dnsmasq[0].server >/dev/null 2>&1; do :; done
+	uci add_list dhcp.@dnsmasq[0].server="$FAKE_DNS"
+	# The ISP resolvers must not sneak back in through DHCP.
+	uci set network.wan.peerdns='0' 2>/dev/null || true
+	uci set network.wan6.peerdns='0' 2>/dev/null || true
+	uci commit dhcp
+	uci commit network
+}
+
+# --- bring it up ------------------------------------------------------------
+say "starting ratatosk"
+/etc/init.d/ratatosk enable
+/etc/init.d/ratatosk restart
+
+tun=""
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+	tun="$(ip link show 2>/dev/null | awk '/^[0-9]+: tun/{sub(":", "", $2); print $2; exit}')"
+	[ -n "$tun" ] && break
+	sleep 1
+done
+[ -n "$tun" ] || die "ratatosk did not create a tun device; see logread"
+say "tun device: $tun"
+
+dns_setup
+firewall_zone "$tun"
+/etc/init.d/dnsmasq restart
+/etc/init.d/ratatosk-failover enable
+/etc/init.d/ratatosk-failover restart
+
+# --- verify -----------------------------------------------------------------
+say "verifying the tunnel"
+ip_info="$(curl -fsS -m 15 --interface "$tun" https://1.1.1.1/cdn-cgi/trace 2>/dev/null |
+	grep '^ip=' || true)"
+[ -n "$ip_info" ] || die "the tunnel does not answer; check logread | grep ratatosk"
+say "egress through the tunnel: ${ip_info#ip=}"
+cat <<MSG
+
+Done. Every LAN device now egresses through ${ip_info#ip=}.
+  /etc/init.d/ratatosk stop       # cut the LAN off (fail-closed)
+  /etc/init.d/ratatosk start
+  ratatosk-failover's log: logread | grep ratatosk-failover
+  links in use: cat /etc/ratatosk/servers.txt (first = primary)
+MSG
