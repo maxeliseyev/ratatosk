@@ -46,7 +46,7 @@ watchdog), rewires the firewall and dnsmasq, then verifies the tunnel by asking
 `1.1.1.1` through it. Re-running is safe (idempotent) and reorders the links to
 the arguments given.
 
-Env overrides: `RATATOSK_VERSION` (default `0.20.7`), `RATATOSK_REPO`,
+Env overrides: `RATATOSK_VERSION` (default `0.20.8`), `RATATOSK_REPO`,
 `SERVER_IP_1` / `SERVER_IP_2` (skip the DNS lookup for that link).
 
 Check with your phone or laptop on the Wi-Fi/LAN:

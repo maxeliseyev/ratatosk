@@ -425,7 +425,20 @@ impl ProxyClient {
 
     /// Route a TCP target: VLESS session, direct connection, or `block`.
     pub async fn open_tcp(&self, address: Address, port: u16) -> Result<OutboundStream> {
-        match self.router.decide(&address, port) {
+        let route = self.router.decide(&address, port);
+        self.open_tcp_routed(address, port, route).await
+    }
+
+    /// The same, with the route already decided by the caller — the netstack
+    /// decides on the sniffed name *and* the dialled address, which this
+    /// client cannot do on its own (it only sees one of them).
+    pub async fn open_tcp_routed(
+        &self,
+        address: Address,
+        port: u16,
+        route: Outbound,
+    ) -> Result<OutboundStream> {
+        match route {
             Outbound::Block => anyhow::bail!("blocked by routing rules: {address}:{port}"),
             Outbound::Direct => {
                 debug!("route direct: {address}:{port}");
@@ -889,6 +902,7 @@ pub(crate) async fn relay_tcp<C>(
     connector: &ProxyClient,
     address: Address,
     port: u16,
+    route: Option<Outbound>,
     on_dialed: impl FnOnce(),
 ) -> Result<()>
 where
@@ -900,13 +914,20 @@ where
         write: Duration::from_secs(runtime.write_timeout_secs),
         idle: Duration::from_secs(runtime.idle_timeout_secs),
     };
-    let mut remote = timeout(
-        Duration::from_secs(runtime.connect_timeout_secs),
-        connector.open_tcp(address, port),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("Connection timeout"))?
-    .map_err(|error| anyhow::anyhow!("Failed to connect to target: {error}"))?;
+    let dial = async {
+        match route {
+            Some(route) => {
+                connector
+                    .open_tcp_routed(address.clone(), port, route)
+                    .await
+            }
+            None => connector.open_tcp(address.clone(), port).await,
+        }
+    };
+    let mut remote = timeout(Duration::from_secs(runtime.connect_timeout_secs), dial)
+        .await
+        .map_err(|_| anyhow::anyhow!("Connection timeout"))?
+        .map_err(|error| anyhow::anyhow!("Failed to connect to target: {error}"))?;
     on_dialed();
     let request_sent = prime_remote(&mut client, &mut remote, timeouts.write).await?;
     copy_bidirectional_with_timeouts(&mut client, &mut remote, timeouts, request_sent).await?;

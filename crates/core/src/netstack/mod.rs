@@ -145,25 +145,34 @@ impl Netstack {
         }
         // The rules still see the dialled address: a destination blocked by
         // `ip_cidr` must not become reachable because it presented a name.
-        let route = match sniffed {
-            Some(sni) => {
-                address = Address::Domain(sni.clone());
-                self.connector
-                    .router()
-                    .decide_sniffed(&sni, dst.ip(), dst.port())
-            }
-            None => self.connector.router().decide(&address, dst.port()),
-        };
-        let flow = self
-            .flows
-            .open("tcp", address.to_string(), dst.port(), route);
+        // `Some` only for a sniffed flow: the decision then knows both the
+        // name and the address, and it must be the one that dials (a plain
+        // `open_tcp` would decide again on the name alone and let a blocked
+        // address through).
+        let route = sniffed.as_ref().map(|sni| {
+            address = Address::Domain(sni.clone());
+            self.connector
+                .router()
+                .decide_sniffed(sni, dst.ip(), dst.port())
+        });
+        let flow = self.flows.open(
+            "tcp",
+            address.to_string(),
+            dst.port(),
+            route.unwrap_or_else(|| self.connector.router().decide(&address, dst.port())),
+        );
         STATS.connection_opened();
         // Replay the sniffed bytes to the target: inside `Counted`, so they
         // count towards the flow's upload like the rest.
         let client = Counted::new(sniff::Prefixed::new(prefix, tcp), flow.clone());
-        let result = relay_tcp(client, &self.connector, address.clone(), dst.port(), || {
-            flow.dialed()
-        })
+        let result = relay_tcp(
+            client,
+            &self.connector,
+            address.clone(),
+            dst.port(),
+            route,
+            || flow.dialed(),
+        )
         .await;
         match result {
             Ok(()) => flow.close(true),
