@@ -16,7 +16,7 @@ Every tagged release carries:
 From GitHub:
 
 ```sh
-gh release download v0.20.9 --repo maxeliseyev/ratatosk -p 'RatatoskCore.xcframework.zip*' -p 'ratatosk-swift.zip'
+gh release download v0.20.10 --repo maxeliseyev/ratatosk -p 'RatatoskCore.xcframework.zip*' -p 'ratatosk-swift.zip'
 unzip RatatoskCore.xcframework.zip
 ```
 
