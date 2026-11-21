@@ -296,6 +296,15 @@ PROG=/usr/bin/ratatosk
 PROBE="$(cat "$DIR/probe-url" 2>/dev/null || echo https://example.com/)"
 FAILS=0
 TICKS=0
+# Ticks (20 s each) between switch-back attempts. Taking the primary back costs
+# the LAN a tunnel restart, so a primary that keeps failing soon after it was
+# taken back is retried less and less often, up to MAX_BACKOFF; STABLE_TICKS of
+# clean probes on it reset the interval to the minimum.
+BACKOFF=5
+MAX_BACKOFF=30
+STABLE_TICKS=30
+NEXT_TRY=0
+STABLE=0
 
 # BusyBox has no `ip -br`: read the device names out of `ip link show`.
 tun_dev() {
@@ -334,13 +343,28 @@ while :; do
 
 	if probe; then
 		FAILS=0
-		# Back on a fallback and the primary answers: prefer it again.
-		if [ "$active" -gt 1 ] && [ $((TICKS % 5)) -eq 0 ]; then
+		if [ "$active" -eq 1 ]; then
+			# Count clean time on the primary: a long stretch of it means the
+			# flap is over, so the next return can be attempted sooner.
+			STABLE=$((STABLE + 1))
+			if [ "$STABLE" -ge "$STABLE_TICKS" ] && [ "$BACKOFF" -ne 5 ]; then
+				BACKOFF=5
+				echo "ratatosk-failover: primary stable, retry interval back to $((BACKOFF * 20))s"
+			fi
+		elif [ "$TICKS" -ge "$NEXT_TRY" ]; then
+			# Back on a fallback and the primary answers: prefer it again.
 			if "$PROG" --probe -f "$DIR/servers.txt" >/dev/null 2>&1; then
+				# Doubled before the switch, so a primary that drops again soon
+				# is not retried as eagerly next time.
+				BACKOFF=$((BACKOFF * 2))
+				[ "$BACKOFF" -gt "$MAX_BACKOFF" ] && BACKOFF=$MAX_BACKOFF
 				switch_to 1
 				TICKS=0
+				NEXT_TRY=0
+				STABLE=0
 			else
-				echo "ratatosk-failover: primary still down, staying on link $active"
+				NEXT_TRY=$((TICKS + BACKOFF))
+				echo "ratatosk-failover: primary still down, next try in $((BACKOFF * 20))s"
 			fi
 		fi
 		continue
@@ -353,6 +377,9 @@ while :; do
 		switch_to "$next"
 		FAILS=0
 		TICKS=0
+		STABLE=0
+		# Give the new exit this long before trying to go back to the primary.
+		NEXT_TRY=$BACKOFF
 	fi
 done
 FAILOVER

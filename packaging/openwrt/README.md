@@ -153,6 +153,11 @@ uci commit wireless && wifi reload
   after three failed probes, and retries the primary every ~100 s while on a
   fallback (a handshake over the pinned `/32`, so the retry never depends on
   the tunnel it is trying to replace).
+- **Flapping primary.** A switch-back also costs the LAN a restart, so the
+  watchdog doubles the gap between retries each time it takes the primary back
+  (100 s → 200 s → 400 s → 10 min cap). Ten minutes of clean probes on the
+  primary reset it to 100 s: a node that keeps dying right after it recovers
+  is retried rarely, and the LAN stays on the fallback instead of bouncing.
 - **IPv6 is not tunnelled** (the netstack is IPv4-only): an fw4 rule rejects
   LAN→WAN IPv6 so nothing leaks around the tunnel.
 - **Migrating from the sing-box setup:** the installer stops and removes the
