@@ -104,6 +104,30 @@ impl Stats {
         self.site_requests.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Zero the cumulative counters (connections, streams, UDP sessions,
+    /// traffic, site requests). Open gauges and per-account `open` counts stay:
+    /// the point is to start a new billing/measurement window, not to lie
+    /// about what is running.
+    pub fn reset_totals(&self) {
+        for counter in [
+            &self.conns_total,
+            &self.streams_total,
+            &self.udp_total,
+            &self.bytes_up,
+            &self.bytes_down,
+            &self.site_requests,
+        ] {
+            counter.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// Zero one account's cumulative counters, keeping its open gauge.
+    pub fn reset_account(&self, tag: &str) {
+        if let Some(account) = self.accounts.lock().expect("stats lock").get_mut(tag) {
+            account.total = 0;
+        }
+    }
+
     pub fn snapshot(&self) -> Snapshot {
         let g = |a: &AtomicU64| a.load(Ordering::Relaxed);
         let mut accounts: Vec<AccountSnapshot> = self
@@ -158,4 +182,47 @@ pub struct AccountSnapshot {
     pub open: u64,
     pub total: u64,
     pub idle_secs: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reset_totals_keeps_open_gauges() {
+        let stats = Stats::new();
+        stats.conn_open("abcd1234");
+        stats.stream_open();
+        stats.stream_open();
+        stats.stream_close(10, 20);
+        stats.udp_open();
+        stats.site_request();
+        let before = stats.snapshot();
+        assert_eq!(before.conns_total, 1);
+        assert_eq!(before.bytes_up, 10);
+        assert_eq!(before.bytes_down, 20);
+
+        stats.reset_totals();
+        let after = stats.snapshot();
+        assert_eq!((after.conns_open, after.conns_total), (1, 0));
+        assert_eq!((after.streams_open, after.streams_total), (1, 0));
+        assert_eq!((after.udp_open, after.udp_total), (1, 0));
+        assert_eq!((after.bytes_up, after.bytes_down), (0, 0));
+        assert_eq!(after.site_requests, 0);
+        assert_eq!(after.accounts[0].open, 1);
+    }
+
+    #[test]
+    fn reset_account_keeps_other_accounts() {
+        let stats = Stats::new();
+        stats.conn_open("aaaa0000");
+        stats.conn_open("bbbb1111");
+        stats.conn_close("bbbb1111");
+        stats.reset_account("aaaa0000");
+        let snap = stats.snapshot();
+        let a = snap.accounts.iter().find(|a| a.tag == "aaaa0000").unwrap();
+        let b = snap.accounts.iter().find(|a| a.tag == "bbbb1111").unwrap();
+        assert_eq!((a.open, a.total), (1, 0));
+        assert_eq!((b.open, b.total), (0, 1));
+    }
 }

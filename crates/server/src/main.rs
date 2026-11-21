@@ -1,23 +1,39 @@
 //! `ratatosk-server -c server.toml [-v]`: run the h3 transport server.
 //! `ratatosk-server --stats [--admin <socket>]`: print a live stats snapshot.
+//! `ratatosk-server accounts …`: manage accounts on a running server.
 
-use anyhow::{bail, Result};
-use ratatosk_server::{Accounts, Server, Settings, Snapshot, DEFAULT_ADMIN_SOCKET};
+use anyhow::{bail, Context, Result};
+use ratatosk_server::{
+    admin, AccountRow, Registry, Server, Settings, Snapshot, DEFAULT_ADMIN_SOCKET,
+};
 use std::path::PathBuf;
-use std::sync::Arc;
 
 mod tui;
 
-const USAGE: &str = "usage: ratatosk-server -c server.toml [-v]\n       ratatosk-server --stats [--admin <socket>]\n       ratatosk-server --tui [--admin <socket>]";
+const USAGE: &str = "\
+usage: ratatosk-server -c server.toml [-v]
+       ratatosk-server --stats [--admin <socket>]
+       ratatosk-server --tui [--admin <socket>]
+       ratatosk-server accounts list [--admin <socket>]
+       ratatosk-server accounts add <label> [--admin <socket>]
+       ratatosk-server accounts rm <label> [--admin <socket>]
+       ratatosk-server accounts disable <label> [--admin <socket>]
+       ratatosk-server accounts enable <label> [--admin <socket>]
+       ratatosk-server accounts reset [<label>] [--admin <socket>]";
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if matches!(args.first().map(String::as_str), Some("accounts")) {
+        return accounts_command(&args[1..]).await;
+    }
+
     let mut config: Option<PathBuf> = None;
     let mut admin: Option<PathBuf> = None;
     let mut stats = false;
     let mut tui = false;
     let mut verbose = false;
-    let mut args = std::env::args().skip(1);
+    let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-c" | "--config" => config = args.next().map(PathBuf::from),
@@ -57,19 +73,95 @@ async fn main() -> Result<()> {
 
     let settings = Settings::load(&config)?;
     let server = Server::from_settings(&settings)?;
-    let accounts = server.accounts();
+    let registry = server.registry();
     tokio::select! {
         result = server.run() => result,
-        _ = reload_on_sighup(accounts, config.clone()) => Ok(()),
+        _ = reload_on_sighup(registry, config.clone()) => Ok(()),
         _ = tokio::signal::ctrl_c() => Ok(()),
     }
 }
 
-/// Reload the account allow-list from `config` on every SIGHUP, so accounts
-/// can be added or removed (e.g. by `accounts.sh`) with `kill -HUP` instead of
-/// a restart that drops every live connection. A broken or empty config is
-/// kept out — the current list stays. Never returns.
-async fn reload_on_sighup(accounts: Accounts, config: PathBuf) {
+/// `accounts list|add|rm|disable|enable|reset`.
+async fn accounts_command(rest: &[String]) -> Result<()> {
+    let mut admin = PathBuf::from(DEFAULT_ADMIN_SOCKET);
+    let mut words: Vec<&str> = Vec::new();
+    let mut args = rest.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--admin" => {
+                admin = args.next().context("--admin needs a socket path")?.into();
+            }
+            "-h" | "--help" => {
+                println!("{USAGE}");
+                return Ok(());
+            }
+            other if other.starts_with('-') => bail!("unknown argument {other:?}\n{USAGE}"),
+            other => words.push(other),
+        }
+    }
+
+    let (action, positional) = words.split_first().context(USAGE)?;
+    match (*action, positional) {
+        ("list", []) => print_accounts(admin::list(&admin).await?),
+        ("add", [label]) => {
+            let added = admin::add(&admin, label).await?;
+            println!("added {label}");
+            println!("  uuid  {}", added.uuid);
+            println!("  tag   {}", added.tag);
+            if let Some(link) = added.link {
+                println!("  link  {link}");
+            }
+            println!("(new connections only; live sessions keep running)");
+        }
+        ("rm", [label]) => {
+            admin::remove(&admin, label).await?;
+            println!("removed {label} (live sessions keep running until they end)");
+        }
+        ("disable", [label]) => {
+            admin::set_disabled(&admin, label, true).await?;
+            println!("disabled {label} (live sessions keep running until they end)");
+        }
+        ("enable", [label]) => {
+            admin::set_disabled(&admin, label, false).await?;
+            println!("enabled {label}");
+        }
+        ("reset", []) => {
+            admin::reset(&admin, None).await?;
+            println!("reset all cumulative counters");
+        }
+        ("reset", [label]) => {
+            admin::reset(&admin, Some(label)).await?;
+            println!("reset counters of {label}");
+        }
+        _ => bail!("{USAGE}"),
+    }
+    Ok(())
+}
+
+fn print_accounts(rows: Vec<AccountRow>) {
+    if rows.is_empty() {
+        println!("no accounts");
+        return;
+    }
+    println!(
+        "{:<13}  {:<8}  {:<6}  {:<5}  {:>4}  {:>6}  link / uuid",
+        "label", "tag", "source", "state", "open", "total"
+    );
+    for row in rows {
+        let state = if row.disabled { "off" } else { "on" };
+        let detail = row.link.unwrap_or_else(|| row.uuid.to_string());
+        println!(
+            "{:<13}  {:<8}  {:<6}  {:<5}  {:>4}  {:>6}  {}",
+            row.label, row.tag, row.source, state, row.open, row.total, detail
+        );
+    }
+}
+
+/// Reload the static users and the accounts file on every SIGHUP, so accounts
+/// can also be changed by editing the files, with `kill -HUP` instead of a
+/// restart that drops every live connection. A broken config or file is kept
+/// out — the current list stays. Never returns.
+async fn reload_on_sighup(registry: Registry, config: PathBuf) {
     use tokio::signal::unix::{signal, SignalKind};
     let mut hup = match signal(SignalKind::hangup()) {
         Ok(h) => h,
@@ -79,12 +171,8 @@ async fn reload_on_sighup(accounts: Accounts, config: PathBuf) {
         }
     };
     while hup.recv().await.is_some() {
-        match Settings::load(&config) {
-            Ok(s) => {
-                let n = s.users.len();
-                *accounts.write().expect("accounts lock poisoned") = Arc::from(s.users);
-                tracing::info!("reloaded {n} accounts on SIGHUP");
-            }
+        match Settings::load(&config).and_then(|s| registry.reload(s.users)) {
+            Ok(n) => tracing::info!("reloaded {n} accounts on SIGHUP"),
             Err(e) => tracing::warn!("SIGHUP reload failed, keeping current accounts: {e:#}"),
         }
     }

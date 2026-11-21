@@ -8,11 +8,15 @@
 //! client session. Ordinary HTTP/3 clients receive content from the
 //! operator-configured HTTP backend, deployed separately from this binary.
 
-mod admin;
+mod accounts;
+pub mod admin;
 mod http3;
 mod stats;
 
-pub use admin::{fetch as fetch_stats, DEFAULT_SOCKET as DEFAULT_ADMIN_SOCKET};
+pub use accounts::{Account, Entry, Registry, Store};
+pub use admin::{
+    fetch as fetch_stats, AccountRow, AddedAccount, Admin, DEFAULT_SOCKET as DEFAULT_ADMIN_SOCKET,
+};
 pub use stats::{AccountSnapshot, Snapshot, Stats};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -91,6 +95,7 @@ pub struct Settings {
     pub listen: SocketAddr,
     pub cert: PathBuf,
     pub key: PathBuf,
+    #[serde(default)]
     pub users: Vec<Uuid>,
     /// Relay to loopback and private networks too. Off: a client must not
     /// reach the server's own services or its LAN through it.
@@ -100,10 +105,19 @@ pub struct Settings {
     /// Without it, ordinary HTTP/3 requests receive a neutral 404 response.
     #[serde(default)]
     pub site_backend: Option<String>,
-    /// Local Unix socket for live stats (`ratatosk-server --stats`/`--tui`).
-    /// Defaults to [`admin::DEFAULT_SOCKET`]; set to "" to turn it off.
+    /// Local Unix socket for live stats and account commands
+    /// (`ratatosk-server --stats|--tui|accounts …`). Defaults to
+    /// [`admin::DEFAULT_SOCKET`]; set to "" to turn it off.
     #[serde(default)]
     pub admin: Option<String>,
+    /// JSON file with accounts the admin socket can add, disable and remove.
+    /// Without it the socket is read-only and `users` above is the whole list.
+    #[serde(default)]
+    pub accounts: Option<PathBuf>,
+    /// Host used in the `h3://` links `accounts add/list` print. Without it
+    /// they show the uuid only, and the operator composes the link.
+    #[serde(default)]
+    pub public_host: Option<String>,
     /// Cap on live connections (authenticated or not). Handshakes wait for a
     /// free slot; beyond [`max_incoming`](Settings::max_incoming) new ones
     /// are refused by QUIC.
@@ -124,8 +138,11 @@ impl Settings {
             std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
         let settings: Settings =
             toml::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
-        if settings.users.is_empty() {
-            bail!("{}: users is empty", path.display());
+        if settings.users.is_empty() && settings.accounts.is_none() {
+            bail!(
+                "{}: users is empty (and no `accounts` file is configured)",
+                path.display()
+            );
         }
         Ok(settings)
     }
@@ -173,11 +190,13 @@ fn default_max_connections_per_ip() -> usize {
 
 pub struct Server {
     endpoint: quinn::Endpoint,
-    users: Accounts,
+    /// Static users, the accounts file and the live allow-list they feed.
+    registry: Registry,
     allow_private: bool,
     site: Option<http3::Site>,
     stats: Arc<Stats>,
     admin: Option<PathBuf>,
+    public_host: Option<String>,
     max_connections: usize,
     max_connections_per_ip: usize,
 }
@@ -200,12 +219,18 @@ impl Server {
         if let Some(backend) = &settings.site_backend {
             server = server.with_site_backend(backend)?;
         }
+        if let Some(path) = &settings.accounts {
+            let store = Arc::new(accounts::Store::open(path.clone())?);
+            let count = server.registry.set_store(Some(store));
+            info!("{} accounts (users + {})", count, path.display());
+        }
         // On by default; `admin = ""` turns it off.
         server.admin = match settings.admin.as_deref() {
             Some("") => None,
             Some(path) => Some(PathBuf::from(path)),
             None => Some(PathBuf::from(admin::DEFAULT_SOCKET)),
         };
+        server.public_host = settings.public_host.clone();
         Ok(server)
     }
 
@@ -266,11 +291,12 @@ impl Server {
             .with_context(|| format!("listen on {listen}/udp"))?;
         Ok(Self {
             endpoint,
-            users: Arc::new(RwLock::new(users.into())),
+            registry: Registry::new(users, None),
             allow_private,
             site: None,
             stats: Arc::new(Stats::new()),
             admin: None,
+            public_host: None,
             max_connections: limits.max_connections,
             max_connections_per_ip: limits.max_connections_per_ip,
         })
@@ -289,31 +315,55 @@ impl Server {
         self
     }
 
+    /// Accounts that can be managed at runtime, on top of the static users.
+    pub fn with_account_store(self, store: Arc<accounts::Store>) -> Self {
+        self.registry.set_store(Some(store));
+        self
+    }
+
+    /// Host used in the `h3://` links the admin commands print.
+    pub fn with_public_host(mut self, host: impl Into<String>) -> Self {
+        self.public_host = Some(host.into());
+        self
+    }
+
     pub fn local_addr(&self) -> Result<SocketAddr> {
         Ok(self.endpoint.local_addr()?)
     }
 
-    /// A handle to the account allow-list, so the binary can hot-reload it on
-    /// SIGHUP (`*handle.write() = Arc::from(new_users)`) without a restart.
-    /// Take it before [`Server::run`], which consumes the server.
+    /// The live allow-list. The [`Registry`] behind it is what SIGHUP and the
+    /// admin socket update; take it before [`Server::run`], which consumes the
+    /// server.
     pub fn accounts(&self) -> Accounts {
-        self.users.clone()
+        self.registry.live()
+    }
+
+    /// The static users, the accounts file and the live list, for the binary's
+    /// SIGHUP handler. Take it before [`Server::run`].
+    pub fn registry(&self) -> Registry {
+        self.registry.clone()
     }
 
     /// Accept connections until the endpoint is closed.
     pub async fn run(self) -> Result<()> {
-        info!("listening on {}/udp", self.local_addr()?);
+        let local = self.local_addr()?;
+        info!("listening on {local}/udp");
         let stats = self.stats.clone();
         if let Some(path) = self.admin.clone() {
-            let stats = stats.clone();
+            let admin = Admin {
+                stats: stats.clone(),
+                registry: self.registry.clone(),
+                public_host: self.public_host.clone(),
+                port: local.port(),
+            };
             tokio::spawn(async move {
-                if let Err(e) = admin::serve(&path, stats).await {
+                if let Err(e) = admin::serve(&path, admin).await {
                     warn!("admin socket: {e:#}");
                 }
             });
         }
         let shared = Arc::new(Shared {
-            users: self.users,
+            users: self.registry.live(),
             allow_private: self.allow_private,
             site: self.site,
             stats,
@@ -421,7 +471,7 @@ impl Shared {
             return http3::serve(transport, self.site.clone()).await;
         };
         drop(transport);
-        let tag = account_tag(&user);
+        let tag = accounts::tag(&user);
         self.stats.conn_open(&tag);
         info!("{remote}: connected as {tag}");
         tokio::spawn(self.clone().datagrams(conn.clone()));
@@ -688,15 +738,6 @@ fn is_public(ip: IpAddr) -> bool {
     }
 }
 
-/// Short, non-secret tag of an account for the log.
-fn account_tag(uuid: &Uuid) -> String {
-    use sha2::Digest;
-    sha2::Sha256::digest(uuid.as_bytes())[..4]
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -741,6 +782,29 @@ mod tests {
         assert_eq!(limits.max_connections, 32);
         assert_eq!(limits.max_incoming, 8);
         assert_eq!(limits.max_connections_per_ip, 2);
+    }
+
+    #[test]
+    fn empty_users_need_an_accounts_file() {
+        let dir = std::env::temp_dir().join(format!("ratatosk-settings-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("server.toml");
+        std::fs::write(
+            &path,
+            "listen = \"127.0.0.1:0\"\ncert = \"/c\"\nkey = \"/k\"\n",
+        )
+        .unwrap();
+        let error = Settings::load(&path).unwrap_err().to_string();
+        assert!(error.contains("users is empty"), "{error}");
+
+        std::fs::write(
+            &path,
+            "listen = \"127.0.0.1:0\"\ncert = \"/c\"\nkey = \"/k\"\naccounts = \"/a.json\"\n",
+        )
+        .unwrap();
+        let settings = Settings::load(&path).unwrap();
+        assert_eq!(settings.accounts, Some(PathBuf::from("/a.json")));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

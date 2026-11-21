@@ -13,6 +13,8 @@ cert = "/etc/letsencrypt/live/example.com/fullchain.pem"
 key = "/etc/letsencrypt/live/example.com/privkey.pem"
 users = ["00000000-0000-0000-0000-000000000000"]
 site_backend = "http://caddy:8080"
+# accounts = "/data/accounts.json" # аккаунты, которыми управляет admin-сокет
+# public_host = "example.com"      # хост для h3:// ссылок в `accounts`
 # allow_private = false
 # max_connections = 1024          # живых соединений суммарно
 # max_incoming = 1024             # незавершённых рукопожатий в очереди quinn
@@ -25,6 +27,62 @@ target/release/ratatosk-server -c server.toml        # -v для подробн�
 ```
 
 Ссылка для клиента: `h3://<uuid>@example.com:8445?sni=example.com#name` — подходит для `ratatosk`, файла ссылок и подписок.
+
+## Аккаунты на лету
+
+`users` в `server.toml` — статический список: он читается при старте и по
+SIGHUP, но менять его на работающем сервере неудобно (в контейнере файл часто
+примонтирован только на чтение). Поэтому аккаунты можно держать в отдельном
+JSON-файле, который admin-сокет правит на лету:
+
+```toml
+accounts = "/data/accounts.json"   # путь на записываемом томе
+public_host = "example.com"        # чтобы `accounts add` печатал готовую ссылку
+```
+
+`users` можно не указывать вовсе (или оставить пустым), если задан `accounts`:
+тогда список целиком живёт в файле.
+
+Живой allow-list — это объединение статических `users` и **включённых**
+аккаунтов из файла. Любое изменение подменяет список целиком, поэтому его
+видит уже следующее рукопожатие, а соединения, которые уже установлены,
+продолжают работать. Это «new connections only»: выключенный аккаунт не
+рвёт текущую сессию, она закончится сама.
+
+```sh
+ratatosk-server accounts list                  # label, tag, источник, состояние, соединения, ссылка
+ratatosk-server accounts add phone             # новый uuid + h3:// ссылка
+ratatosk-server accounts rm phone              # убрать (новые подключения отклоняются)
+ratatosk-server accounts disable phone         # оставить uuid в файле, но не пускать
+ratatosk-server accounts enable phone
+ratatosk-server accounts reset                 # обнулить накопленные счётчики (трафик)
+ratatosk-server accounts reset phone           # только по одному аккаунту
+ratatosk-server accounts list --admin /run/ratatosk-server.sock
+```
+
+`tag` — это короткий не-секретный отпечаток uuid (первые 4 байта SHA-256); он
+же используется в логах и в `--stats`/`--tui`. Поэтому `reset phone` находит
+аккаунт по метке, а статистика в снапшоте — по тегу.
+
+Файл — JSON `{"accounts":[{"label","uuid","created","disabled"}]}`, пишется
+целиком через временный файл и rename (краш не оставит половину), с правами
+`0600`. Файл, который не парсится, сервер не перезаписывает: старт (и SIGHUP)
+падают с ошибкой, а текущий список остаётся. `users` из `server.toml` через
+файл удалить нельзя — это статические аккаунты, для них правьте `server.toml`
+и шлите SIGHUP.
+
+Admin-сокет (`admin = "..."`, по умолчанию `/run/ratatosk-server.sock`)
+создаётся с правами `0600`: он выдаёт uuids, то есть учётные данные, поэтому
+подключаться может только владелец процесса. Протокол — одна JSON-строка
+запроса и одна строка ответа, например:
+
+```sh
+printf '{"cmd":"accounts_list"}\n' | socat - UNIX-CONNECT:/run/ratatosk-server.sock
+```
+
+Клиент, который ничего не прислал в течение двух секунд, получает прежний поток
+снапшотов раз в секунду — так `--stats`/`--tui` из старых сборок продолжают
+работать. `{"cmd":"stats_watch"}` включает тот же поток явно.
 
 ## Ограничения ресурсов
 

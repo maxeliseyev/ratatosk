@@ -5,7 +5,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use ratatosk_server::Snapshot;
 use ratatui::layout::{Constraint, Layout};
@@ -13,16 +13,11 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Row, Table};
 use ratatui::Frame;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::net::UnixStream;
 
 use crate::{bytes, duration};
 
 pub async fn run(path: &Path) -> Result<()> {
-    let stream = UnixStream::connect(path)
-        .await
-        .with_context(|| format!("connect {} (is the server running?)", path.display()))?;
-    let mut lines = BufReader::new(stream).lines();
+    let mut lines = ratatosk_server::admin::watch(path).await?;
 
     let mut terminal = ratatui::init();
     let result = event_loop(&mut terminal, &mut lines).await;

@@ -5,13 +5,13 @@
 use ratatosk_core::h3::H3Client;
 use ratatosk_core::protocol::vless::Address;
 use ratatosk_core::{ActiveServer, Config, ProxyClient, VlessUrl};
-use ratatosk_server::{Accounts, Limits, Server};
+use ratatosk_server::{admin, Accounts, Limits, Server, Store};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{TcpListener, UnixStream};
 use tokio::time::timeout;
 use uuid::Uuid;
 
@@ -32,11 +32,17 @@ async fn stand(allow_private: bool) -> Stand {
 }
 
 async fn stand_with(allow_private: bool, limits: Limits) -> Stand {
+    stand_full(allow_private, limits, None).await
+}
+
+/// Like [`stand_with`], optionally with an accounts file the admin socket can
+/// change at runtime.
+async fn stand_full(allow_private: bool, limits: Limits, store: Option<Arc<Store>>) -> Stand {
     let generated = rcgen::generate_simple_self_signed(vec![NAME.to_string()]).unwrap();
     let cert = CertificateDer::from(generated.cert.der().to_vec());
     let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(generated.key_pair.serialize_der()));
     let admin = std::env::temp_dir().join(format!("ratatosk-e2e-{}.sock", Uuid::new_v4()));
-    let server = Server::bind_with_limits(
+    let mut server = Server::bind_with_limits(
         "127.0.0.1:0".parse().unwrap(),
         vec![cert.clone()],
         key,
@@ -46,9 +52,20 @@ async fn stand_with(allow_private: bool, limits: Limits) -> Stand {
     )
     .unwrap()
     .with_admin(admin.clone());
+    if let Some(store) = store {
+        server = server.with_account_store(store);
+    }
     let server_addr = server.local_addr().unwrap();
     let accounts = server.accounts();
     tokio::spawn(server.run());
+    // The admin socket is bound inside `Server::run`, which is spawned: wait
+    // for it, or a test races the start-up.
+    for _ in 0..100 {
+        if tokio::net::UnixStream::connect(&admin).await.is_ok() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 
     let echo = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let echo_addr = echo.local_addr().unwrap();
@@ -76,6 +93,30 @@ async fn stand_with(allow_private: bool, limits: Limits) -> Stand {
         admin,
         accounts,
     }
+}
+
+/// A stand whose accounts live in a file the admin socket can edit.
+async fn stand_with_file_accounts() -> Stand {
+    let path = std::env::temp_dir().join(format!("ratatosk-accounts-{}.json", Uuid::new_v4()));
+    let store = Arc::new(Store::open(path).unwrap());
+    stand_full(true, Limits::default(), Some(store)).await
+}
+
+/// One TCP relay through `uuid`, `false` when the server refuses it.
+async fn relay_ok(stand: &Stand, uuid: Uuid) -> bool {
+    let client = client(stand, uuid);
+    let (address, port) = echo_target(stand);
+    let relay = async {
+        let mut stream = client.open_tcp(&address, port).await?;
+        stream.write_all(b"ping").await?;
+        let mut buf = [0u8; 4];
+        stream.read_exact(&mut buf).await?;
+        anyhow::Ok(buf)
+    };
+    matches!(
+        timeout(Duration::from_secs(4), relay).await,
+        Ok(Ok(buf)) if buf == *b"ping"
+    )
 }
 
 fn client(stand: &Stand, uuid: Uuid) -> H3Client {
@@ -730,4 +771,149 @@ async fn stats_report_a_connection_and_its_stream() {
     assert!(snap.streams_total >= 1);
     assert_eq!(snap.accounts.len(), 1);
     assert_eq!(snap.accounts[0].open, 1);
+}
+
+/// An account added on the admin socket works on the next handshake, without a
+/// restart, and shows up in the list.
+#[tokio::test]
+async fn admin_add_enables_an_account_live() {
+    let stand = stand_with_file_accounts().await;
+    let added = admin::add(&stand.admin, "phone").await.unwrap();
+    assert_eq!(added.label, "phone");
+    assert_eq!(added.tag.len(), 8);
+
+    assert!(relay_ok(&stand, added.uuid).await, "a fresh account relays");
+
+    let rows = admin::list(&stand.admin).await.unwrap();
+    assert!(rows
+        .iter()
+        .any(|r| r.label == "phone" && r.source == "file" && !r.disabled));
+    assert!(rows.iter().any(|r| r.source == "server" && r.uuid == ALICE));
+}
+
+/// Disabling keeps the uuid in the file but refuses the next handshake;
+/// enabling brings it back.
+#[tokio::test]
+async fn admin_disable_and_enable_a_stored_account() {
+    let stand = stand_with_file_accounts().await;
+    let added = admin::add(&stand.admin, "phone").await.unwrap();
+    assert!(relay_ok(&stand, added.uuid).await);
+
+    admin::set_disabled(&stand.admin, "phone", true)
+        .await
+        .unwrap();
+    assert!(
+        !relay_ok(&stand, added.uuid).await,
+        "disabled must not relay"
+    );
+    let rows = admin::list(&stand.admin).await.unwrap();
+    assert!(rows.iter().any(|r| r.label == "phone" && r.disabled));
+
+    admin::set_disabled(&stand.admin, "phone", false)
+        .await
+        .unwrap();
+    assert!(
+        relay_ok(&stand, added.uuid).await,
+        "re-enabled relays again"
+    );
+}
+
+/// Removing closes the account to new connections; static `server.toml` users
+/// are not in the file and cannot be removed through it.
+#[tokio::test]
+async fn admin_remove_works_and_static_users_are_guarded() {
+    let stand = stand_with_file_accounts().await;
+    let added = admin::add(&stand.admin, "phone").await.unwrap();
+    admin::remove(&stand.admin, "phone").await.unwrap();
+    assert!(!relay_ok(&stand, added.uuid).await);
+    let rows = admin::list(&stand.admin).await.unwrap();
+    assert!(rows.iter().all(|r| r.label != "phone"));
+
+    let error = admin::remove(&stand.admin, "(server.toml)")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("no account labeled"), "{error}");
+    assert!(relay_ok(&stand, ALICE).await, "the static user still works");
+}
+
+/// `accounts reset` zeroes the cumulative counters, keeping the open gauges.
+#[tokio::test]
+async fn admin_reset_counters() {
+    let stand = stand_with_file_accounts().await;
+    let added = admin::add(&stand.admin, "phone").await.unwrap();
+    assert!(relay_ok(&stand, added.uuid).await);
+
+    // Bytes are added when the relay ends on the server side, so give it a
+    // moment after the client closed the stream.
+    let mut before = ratatosk_server::fetch_stats(&stand.admin).await.unwrap();
+    for _ in 0..20 {
+        if before.bytes_up > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        before = ratatosk_server::fetch_stats(&stand.admin).await.unwrap();
+    }
+    assert!(before.conns_total >= 1, "{before:?}");
+    assert!(before.bytes_up > 0, "{before:?}");
+
+    admin::reset(&stand.admin, Some("phone")).await.unwrap();
+    let after = ratatosk_server::fetch_stats(&stand.admin).await.unwrap();
+    let phone = after
+        .accounts
+        .iter()
+        .find(|a| a.tag == added.tag)
+        .expect("the account keeps a row");
+    assert_eq!(phone.total, 0, "per-account total reset");
+    assert!(after.conns_total >= 1, "other counters untouched");
+
+    admin::reset(&stand.admin, None).await.unwrap();
+    let all = ratatosk_server::fetch_stats(&stand.admin).await.unwrap();
+    assert_eq!(all.conns_total, 0);
+    assert_eq!(all.bytes_up, 0);
+    assert_eq!(all.bytes_down, 0);
+}
+
+/// A client that sends no request still receives the snapshot stream, so a
+/// `--stats`/`--tui` from an older build keeps working.
+#[tokio::test]
+async fn a_silent_client_still_gets_snapshots() {
+    let stand = stand(true).await;
+    let stream = UnixStream::connect(&stand.admin).await.unwrap();
+    let mut lines = BufReader::new(stream).lines();
+    let line = timeout(Duration::from_secs(5), lines.next_line())
+        .await
+        .expect("no snapshot: the legacy protocol broke")
+        .unwrap()
+        .unwrap();
+    let snap: ratatosk_server::Snapshot = serde_json::from_str(&line).unwrap();
+    assert_eq!(snap.conns_total, 0);
+}
+
+/// The admin socket can change credentials, so only the owner may connect.
+#[tokio::test]
+async fn the_admin_socket_is_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let stand = stand(true).await;
+    let mode = std::fs::metadata(&stand.admin)
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600);
+}
+
+/// `--tui` runs on this stream: the explicit `stats.watch` command, then one
+/// snapshot per second.
+#[tokio::test]
+async fn stats_watch_streams_snapshots() {
+    let stand = stand(true).await;
+    let mut lines = admin::watch(&stand.admin).await.unwrap();
+    let line = timeout(Duration::from_secs(3), lines.next_line())
+        .await
+        .expect("no snapshot on the watch stream")
+        .unwrap()
+        .unwrap();
+    let snap: ratatosk_server::Snapshot = serde_json::from_str(&line).unwrap();
+    assert_eq!(snap.conns_total, 0);
 }
