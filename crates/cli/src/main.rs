@@ -89,7 +89,7 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let (mut config, servers) = load_config(args.clone())?;
+    let (mut config, mut servers) = load_config(args.clone())?;
     // Split-tunnel: union the CLI zones with any from the config's `[routing]`.
     config
         .routing
@@ -102,6 +102,16 @@ async fn main() -> Result<()> {
         config.tun.enabled = true;
         config.validate()?;
     }
+    // TUN mode points the system resolver at FakeDNS, so an exit hostname
+    // dialled after start-up would resolve to a fake address and loop back into
+    // the tunnel. In the TUI that would make every switch a no-op; resolve all
+    // exits now, while DNS still tells the truth, and hand their addresses to
+    // the TUN so it keeps each one routed off the tunnel.
+    let exit_ips = if args.tui && config.tun.enabled {
+        crate::system::tun_native::prepare_exits(&mut servers, &mut config.server).await
+    } else {
+        Vec::new()
+    };
     let config = Arc::new(config);
     let sidecar = if config.needs_xray_sidecar()? {
         config.runtime.xray_path.as_str()
@@ -172,8 +182,9 @@ async fn main() -> Result<()> {
     match tui_logs {
         Some(logs) => {
             let active = ActiveServer::new(config.server.clone());
-            let server = tokio::spawn(serve_with_server(config.clone(), active.clone()));
-            crate::ui::tui::run(config, servers, active, logs, server).await
+            let pinned = exit_ips.clone();
+            let server = tokio::spawn(serve_with_server(config.clone(), active.clone(), exit_ips));
+            crate::ui::tui::run(config, servers, active, logs, server, pinned).await
         }
         None => serve(config).await,
     }

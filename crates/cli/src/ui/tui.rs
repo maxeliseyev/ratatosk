@@ -173,6 +173,10 @@ struct App {
     /// Generation of the current ping round; stale results are dropped.
     ping_round: u64,
     pings_in_flight: usize,
+    /// Every exit address the TUN keeps routed off the tunnel (empty outside
+    /// TUN mode). A server added at runtime has no pin yet, so switching to it
+    /// would dial its own host through the tunnel: refuse instead.
+    pinned_exits: Vec<std::net::Ipv4Addr>,
     sub_rx:
         mpsc::UnboundedReceiver<Result<ratatosk_core::config::subscription::Subscription, String>>,
     sub_tx:
@@ -484,6 +488,13 @@ impl App {
             self.status = format!("{} is already active", entry.name);
             return;
         }
+        if self.config.tun.enabled && !self.exit_is_pinned(&entry.server.address) {
+            self.status = format!(
+                "{} is not pinned for TUN: add it to server.txt and restart ratatosk",
+                entry.name
+            );
+            return;
+        }
         match self.active.swap(entry.server.clone(), &self.config) {
             Ok(()) => {
                 self.active_index = self.selected;
@@ -494,6 +505,14 @@ impl App {
             }
             Err(e) => self.status = format!("cannot switch: {e}"),
         }
+    }
+
+    /// Whether `address` is one the TUN routes around the tunnel.
+    fn exit_is_pinned(&self, address: &str) -> bool {
+        address
+            .parse::<std::net::Ipv4Addr>()
+            .map(|ip| self.pinned_exits.contains(&ip))
+            .unwrap_or(false)
     }
 
     fn draw(&mut self, frame: &mut Frame) {
@@ -801,6 +820,7 @@ pub async fn run(
     active: ActiveServer,
     logs: Arc<LogBuffer>,
     mut server: JoinHandle<Result<()>>,
+    pinned_exits: Vec<std::net::Ipv4Addr>,
 ) -> Result<()> {
     let mut terminal = ratatui::init();
     let _ = crossterm::execute!(io::stdout(), EnableBracketedPaste);
@@ -830,6 +850,7 @@ pub async fn run(
         down_rate: 0.0,
         status: String::new(),
         latency: Vec::new(),
+        pinned_exits,
         ping_rx,
         ping_tx,
         ping_round: 0,

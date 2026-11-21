@@ -3,6 +3,7 @@
 use anyhow::Result;
 use ratatosk_core::proxy::runtime::serve_with_shutdown;
 use ratatosk_core::{ActiveServer, Config};
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -10,12 +11,18 @@ use tracing::{info, warn};
 
 pub async fn serve(config: Arc<Config>) -> Result<()> {
     let active = ActiveServer::new(config.server.clone());
-    serve_with_server(config, active).await
+    serve_with_server(config, active, Vec::new()).await
 }
 
 /// Like [`serve`], with an [`ActiveServer`] handle the caller can use to
-/// switch servers while running (the TUI does this).
-pub async fn serve_with_server(config: Arc<Config>, active: ActiveServer) -> Result<()> {
+/// switch servers while running (the TUI does this), and the pre-resolved
+/// addresses of every exit in the list (see `tun_native::prepare_exits`); the
+/// TUN keeps all of them routed off the tunnel.
+pub async fn serve_with_server(
+    config: Arc<Config>,
+    active: ActiveServer,
+    exit_ips: Vec<Ipv4Addr>,
+) -> Result<()> {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let use_sidecar = config.needs_xray_sidecar()?;
 
@@ -41,10 +48,14 @@ pub async fn serve_with_server(config: Arc<Config>, active: ActiveServer) -> Res
         }
         serve_with_shutdown(config.clone(), active.clone(), shutdown_rx.clone()).await
     };
-    let mut tun_task = config
-        .tun
-        .enabled
-        .then(|| tokio::spawn(run_tun(config.clone(), shutdown_rx.clone())));
+    let mut tun_task = config.tun.enabled.then(|| {
+        tokio::spawn(run_tun(
+            config.clone(),
+            shutdown_rx.clone(),
+            active.clone(),
+            exit_ips,
+        ))
+    });
     let tun_failed = async {
         match tun_task.as_mut() {
             Some(task) => match task.await {
@@ -84,6 +95,11 @@ pub async fn serve_with_server(config: Arc<Config>, active: ActiveServer) -> Res
     result
 }
 
-async fn run_tun(config: Arc<Config>, shutdown: watch::Receiver<bool>) -> Result<()> {
-    crate::system::tun_native::run(config, shutdown).await
+async fn run_tun(
+    config: Arc<Config>,
+    shutdown: watch::Receiver<bool>,
+    active: ActiveServer,
+    exit_ips: Vec<Ipv4Addr>,
+) -> Result<()> {
+    crate::system::tun_native::run(config, shutdown, active, exit_ips).await
 }
