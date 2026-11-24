@@ -2363,6 +2363,7 @@ dependencies = [
  "h3-quinn",
  "h3-webtransport",
  "http",
+ "libc",
  "quinn",
  "ratatosk-core",
  "ratatui",

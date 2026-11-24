@@ -23,6 +23,14 @@ usage: ratatosk-server -c server.toml [-v]
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // `--stats | head` should end quietly: Rust ignores SIGPIPE, so the write
+    // to the closed pipe would panic on `println!` instead.
+    #[cfg(unix)]
+    // SAFETY: installing the default disposition for SIGPIPE has no
+    // preconditions and runs before any threads or handlers exist.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     if matches!(args.first().map(String::as_str), Some("accounts")) {
         return accounts_command(&args[1..]).await;
