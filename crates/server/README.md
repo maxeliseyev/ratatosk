@@ -15,6 +15,7 @@ users = ["00000000-0000-0000-0000-000000000000"]
 site_backend = "http://caddy:8080"
 # accounts = "/data/accounts.json" # аккаунты, которыми управляет admin-сокет
 # public_host = "example.com"      # хост для h3:// ссылок в `accounts`
+# public_port = 443                # порт для ссылок, если снаружи не тот
 # allow_private = false
 # max_connections = 1024          # живых соединений суммарно
 # max_incoming = 1024             # незавершённых рукопожатий в очереди quinn

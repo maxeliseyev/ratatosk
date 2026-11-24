@@ -118,6 +118,11 @@ pub struct Settings {
     /// they show the uuid only, and the operator composes the link.
     #[serde(default)]
     pub public_host: Option<String>,
+    /// Port used in those links when the server sits behind a port mapping
+    /// (h3 published on 443/udp, listening internally on a high port).
+    /// Defaults to the listening port.
+    #[serde(default)]
+    pub public_port: Option<u16>,
     /// Cap on live connections (authenticated or not). Handshakes wait for a
     /// free slot; beyond [`max_incoming`](Settings::max_incoming) new ones
     /// are refused by QUIC.
@@ -197,6 +202,7 @@ pub struct Server {
     stats: Arc<Stats>,
     admin: Option<PathBuf>,
     public_host: Option<String>,
+    public_port: Option<u16>,
     max_connections: usize,
     max_connections_per_ip: usize,
 }
@@ -231,6 +237,7 @@ impl Server {
             None => Some(PathBuf::from(admin::DEFAULT_SOCKET)),
         };
         server.public_host = settings.public_host.clone();
+        server.public_port = settings.public_port;
         Ok(server)
     }
 
@@ -297,6 +304,7 @@ impl Server {
             stats: Arc::new(Stats::new()),
             admin: None,
             public_host: None,
+            public_port: None,
             max_connections: limits.max_connections,
             max_connections_per_ip: limits.max_connections_per_ip,
         })
@@ -327,6 +335,12 @@ impl Server {
         self
     }
 
+    /// Port used in those links, when it differs from the listening one.
+    pub fn with_public_port(mut self, port: u16) -> Self {
+        self.public_port = Some(port);
+        self
+    }
+
     pub fn local_addr(&self) -> Result<SocketAddr> {
         Ok(self.endpoint.local_addr()?)
     }
@@ -354,7 +368,7 @@ impl Server {
                 stats: stats.clone(),
                 registry: self.registry.clone(),
                 public_host: self.public_host.clone(),
-                port: local.port(),
+                port: self.public_port.unwrap_or(local.port()),
             };
             tokio::spawn(async move {
                 if let Err(e) = admin::serve(&path, admin).await {

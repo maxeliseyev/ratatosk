@@ -422,3 +422,45 @@ pub async fn reset(path: &Path, label: Option<&str>) -> Result<()> {
     )
     .await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn admin(host: Option<&str>, port: u16) -> Admin {
+        Admin {
+            stats: Arc::new(Stats::new()),
+            registry: Registry::new(Vec::new(), None),
+            public_host: host.map(str::to_string),
+            port,
+        }
+    }
+
+    #[test]
+    fn links_use_the_public_endpoint() {
+        let uuid = Uuid::from_u128(1);
+        let with_host = admin(Some("example.com"), 443);
+        assert_eq!(
+            with_host.link("phone", &uuid).as_deref(),
+            Some(format!("h3://{uuid}@example.com:443?sni=example.com#phone").as_str())
+        );
+        assert_eq!(
+            with_host
+                .link("(server.toml)", &uuid)
+                .as_deref()
+                .map(|l| l.contains("server.toml")),
+            Some(true)
+        );
+        assert_eq!(admin(None, 443).link("phone", &uuid), None);
+    }
+
+    #[test]
+    fn a_reply_is_ok_or_an_error() {
+        let ok = Reply::data(42);
+        assert!(ok.ok);
+        assert_eq!(ok.data, Some(serde_json::json!(42)));
+        let err = Reply::error("nope");
+        assert!(!err.ok);
+        assert_eq!(err.error.as_deref(), Some("nope"));
+    }
+}
